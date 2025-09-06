@@ -89,6 +89,7 @@ impl Env {
                 .unwrap_or_else(|| panic!("Variable {} not found", s)),
             Expression::Integer(n) => Value::Number(n.clone()),
             Expression::U32(n) => Value::U32(*n),
+            Expression::MemberAccess(base, field) => unimplemented!("Member access not implemented"),
         }
     }
 }

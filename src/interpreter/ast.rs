@@ -6,6 +6,7 @@ pub enum Expression {
     Token(String),
     Integer(BigInt),
     U32(u32),
+    MemberAccess(Box<Expression>, String),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]

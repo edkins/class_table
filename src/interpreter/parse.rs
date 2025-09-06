@@ -32,6 +32,10 @@ fn comma(input: &str) -> IResult<&str, ()> {
     value((), terminated(tag(","), multispace0)).parse(input)
 }
 
+fn dot(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag("."), multispace0)).parse(input)
+}
+
 fn semicolon(input: &str) -> IResult<&str, ()> {
     value((), terminated(tag(";"), multispace0)).parse(input)
 }
@@ -149,7 +153,7 @@ fn specific_word(expected: Word) -> impl Fn(&str) -> IResult<&str, ()> {
     }
 }
 
-fn expression(input: &str) -> IResult<&str, Expression> {
+fn expression_word(input: &str) -> IResult<&str, Expression> {
     let (input, t) = opt(word).parse(input)?;
     match t {
         None => Ok((input, Expression::Empty)),
@@ -161,6 +165,44 @@ fn expression(input: &str) -> IResult<&str, Expression> {
             nom::error::ErrorKind::Tag,
         ))),
     }
+}
+
+enum ExpressionSuffix {
+    Field(String),
+}
+
+impl ExpressionSuffix {
+    fn apply(self, base: Expression) -> Expression {
+        match self {
+            ExpressionSuffix::Field(name) => {
+                Expression::MemberAccess(Box::new(base), name)
+            }
+        }
+    }
+}
+
+fn expression_field_suffix(input: &str) -> IResult<&str, ExpressionSuffix> {
+    let (input, field) = preceded(dot, word).parse(input)?;
+    match field {
+        Word::Token(name) => Ok((input, ExpressionSuffix::Field(name))),
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        ))),
+    }
+}
+
+fn expression_suffix(input: &str) -> IResult<&str, ExpressionSuffix> {
+    alt((expression_field_suffix,)).parse(input)
+}
+
+fn expression(input: &str) -> IResult<&str, Expression> {
+    let (input, mut base) = expression_word(input)?;
+    let (input, suffixes) = many0(expression_suffix).parse(input)?;
+    for suffix in suffixes.into_iter() {
+        base = suffix.apply(base);
+    }
+    Ok((input, base))
 }
 
 fn class_row(input: &str) -> IResult<&str, Vec<Expression>> {
@@ -365,6 +407,26 @@ mod test {
         let input = "'!@#$%^&*().-'";
         let result = all_consuming(expression).parse(input);
         assert!(result.unwrap().1 == Expression::Token("!@#$%^&*().-".to_owned()));
+    }
+
+    #[test]
+    fn expression_field() {
+        let input = "my_token.my_field";
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::MemberAccess(Box::new(Expression::Token("my_token".to_owned())), "my_field".to_owned()));
+    }
+
+    #[test]
+    fn expression_fields() {
+        let input = "my_token.my_field.my_other_field";
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::MemberAccess(
+            Box::new(Expression::MemberAccess(
+                Box::new(Expression::Token("my_token".to_owned())),
+                "my_field".to_owned()
+            )),
+            "my_other_field".to_owned()
+        ));
     }
 
     #[test]
