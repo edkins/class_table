@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use num_bigint::BigInt;
 
-use crate::interpreter::ast::{ClassCell, Declaration, Function, ProgramFile, Statement};
+use crate::interpreter::ast::{Declaration, Expression, Function, ProgramFile, Statement};
 
 pub struct Env {
     vars: HashMap<String, VarValue>,
@@ -21,7 +21,7 @@ pub enum Value {
 
 impl ProgramFile {
     pub fn lookup_fn(&self, name: &str) -> Option<&Function> {
-        let search_value = ClassCell::Token(name.to_owned());
+        let search_value = Expression::Token(name.to_owned());
         self.declarations.iter().find_map(|decl| match decl {
             Declaration::Fn(func) if func.header[0] == search_value => Some(func),
             _ => None,
@@ -70,7 +70,7 @@ impl Env {
             Statement::Let(var, expr) => {
                 let value = self.eval_expr(expr);
                 match var.as_slice() {
-                    &[ClassCell::Token(ref x)] => {
+                    &[Expression::Token(ref x)] => {
                         self.create_var(x.clone(), value);
                         Value::Unit
                     }
@@ -80,15 +80,15 @@ impl Env {
         }
     }
 
-    pub fn eval_expr(&mut self, expr: &ClassCell) -> Value {
+    pub fn eval_expr(&mut self, expr: &Expression) -> Value {
         match expr {
-            ClassCell::Empty => Value::Unit,
-            ClassCell::Token(s) => self
+            Expression::Empty => Value::Unit,
+            Expression::Token(s) => self
                 .lookup_var(s)
                 .cloned()
                 .unwrap_or_else(|| panic!("Variable {} not found", s)),
-            ClassCell::Integer(n) => Value::Number(n.clone()),
-            ClassCell::U32(n) => Value::U32(*n),
+            Expression::Integer(n) => Value::Number(n.clone()),
+            Expression::U32(n) => Value::U32(*n),
         }
     }
 }

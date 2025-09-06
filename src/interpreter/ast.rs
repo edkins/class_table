@@ -1,7 +1,7 @@
 use num_bigint::BigInt;
 
 #[derive(Debug, PartialEq, Clone, Eq)]
-pub enum ClassCell {
+pub enum Expression {
     Empty,
     Token(String),
     Integer(BigInt),
@@ -10,21 +10,21 @@ pub enum ClassCell {
 
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub struct ClassTable {
-    pub header: Vec<ClassCell>,
-    pub body: Vec<Vec<ClassCell>>,
+    pub header: Vec<Expression>,
+    pub body: Vec<Vec<Expression>>,
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub enum Statement {
-    Expr(ClassCell),
-    Let(Vec<ClassCell>, ClassCell),
+    Expr(Expression),
+    Let(Vec<Expression>, Expression),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub struct Function {
-    pub header: Vec<ClassCell>,
-    pub params: Vec<Vec<ClassCell>>,
-    pub ret: Vec<ClassCell>,
+    pub header: Vec<Expression>,
+    pub params: Vec<Vec<Expression>>,
+    pub ret: Vec<Expression>,
     pub body: Vec<Statement>,
 }
 

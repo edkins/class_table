@@ -11,7 +11,7 @@ use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
 
 use crate::interpreter::ast::{
-    ClassCell, ClassTable, Declaration, Function, ProgramFile, Statement,
+    ClassTable, Declaration, Expression, Function, ProgramFile, Statement,
 };
 
 #[derive(Debug, PartialEq, Clone, Eq)]
@@ -149,13 +149,13 @@ fn specific_word(expected: Word) -> impl Fn(&str) -> IResult<&str, ()> {
     }
 }
 
-fn class_cell(input: &str) -> IResult<&str, ClassCell> {
+fn expression(input: &str) -> IResult<&str, Expression> {
     let (input, t) = opt(word).parse(input)?;
     match t {
-        None => Ok((input, ClassCell::Empty)),
-        Some(Word::Token(x)) => Ok((input, ClassCell::Token(x))),
-        Some(Word::Integer(n)) => Ok((input, ClassCell::Integer(n))),
-        Some(Word::U32(n)) => Ok((input, ClassCell::U32(n))),
+        None => Ok((input, Expression::Empty)),
+        Some(Word::Token(x)) => Ok((input, Expression::Token(x))),
+        Some(Word::Integer(n)) => Ok((input, Expression::Integer(n))),
+        Some(Word::U32(n)) => Ok((input, Expression::U32(n))),
         _ => Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
@@ -163,10 +163,10 @@ fn class_cell(input: &str) -> IResult<&str, ClassCell> {
     }
 }
 
-fn class_row(input: &str) -> IResult<&str, Vec<ClassCell>> {
-    let (input, result) = separated_list1(colon, class_cell).parse(input)?;
+fn class_row(input: &str) -> IResult<&str, Vec<Expression>> {
+    let (input, result) = separated_list1(colon, expression).parse(input)?;
     // Don't allow a single empty cell (this would correspond to an empty input)
-    if result == vec![ClassCell::Empty] {
+    if result == vec![Expression::Empty] {
         Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
@@ -195,7 +195,7 @@ fn class_table(input: &str) -> IResult<&str, ClassTable> {
 }
 
 fn expr_statement(input: &str) -> IResult<&str, Statement> {
-    let (input, expr) = class_cell(input)?;
+    let (input, expr) = expression(input)?;
     Ok((input, Statement::Expr(expr)))
 }
 
@@ -203,7 +203,7 @@ fn let_statement(input: &str) -> IResult<&str, Statement> {
     let (input, _) = specific_word(Word::Let).parse(input)?;
     let (input, var) = class_row(input)?;
     let (input, _) = equals(input)?;
-    let (input, expr) = class_cell(input)?;
+    let (input, expr) = expression(input)?;
     Ok((input, Statement::Let(var, expr)))
 }
 
@@ -256,115 +256,115 @@ pub fn parse(input: &str) -> ProgramFile {
 mod test {
     use super::*;
     #[test]
-    fn class_cell_token() {
+    fn expression_token() {
         let input = "my_token";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Token("my_token".to_owned()));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Token("my_token".to_owned()));
     }
 
     #[test]
-    fn class_cell_token_space() {
+    fn expression_token_space() {
         let input = "my_token ";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Token("my_token".to_owned()));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Token("my_token".to_owned()));
     }
 
     #[test]
-    fn class_cell_int() {
+    fn expression_int() {
         let input = "42";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Integer(BigInt::from(42)));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Integer(BigInt::from(42)));
     }
 
     #[test]
-    fn class_cell_hex() {
+    fn expression_hex() {
         let input = "0x2A";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Integer(BigInt::from(42)));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Integer(BigInt::from(42)));
     }
 
     #[test]
-    fn class_cell_hex_lower() {
+    fn expression_hex_lower() {
         let input = "0x2a";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Integer(BigInt::from(42)));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Integer(BigInt::from(42)));
     }
 
     #[test]
-    fn class_cell_hex_empty_error() {
+    fn expression_hex_empty_error() {
         let input = "0x";
-        let result = all_consuming(class_cell).parse(input);
+        let result = all_consuming(expression).parse(input);
         assert!(result.is_err());
     }
 
     #[test]
-    fn class_cell_u32() {
+    fn expression_u32() {
         let input = "42u32";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::U32(42));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::U32(42));
     }
 
     #[test]
-    fn class_cell_hex_u32() {
+    fn expression_hex_u32() {
         let input = "0x2Au32";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::U32(42));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::U32(42));
     }
 
     #[test]
-    fn class_cell_int_suffix_error() {
+    fn expression_int_suffix_error() {
         let input = "42abc";
-        let result = all_consuming(class_cell).parse(input);
+        let result = all_consuming(expression).parse(input);
         assert!(result.is_err());
     }
 
     #[test]
-    fn class_cell_int_prefix() {
+    fn expression_int_prefix() {
         let input = "abc42";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Token("abc42".to_owned()));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Token("abc42".to_owned()));
     }
 
     #[test]
-    fn class_cell_underscore_int() {
+    fn expression_underscore_int() {
         let input = "_42";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Token("_42".to_owned()));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Token("_42".to_owned()));
     }
 
     #[test]
-    fn class_cell_quoted_class() {
+    fn expression_quoted_class() {
         let input = "'class'";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Token("class".to_owned()));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Token("class".to_owned()));
     }
 
     #[test]
-    fn class_cell_quoted_empty() {
+    fn expression_quoted_empty() {
         let input = "''";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Token("".to_owned()));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Token("".to_owned()));
     }
 
     #[test]
-    fn class_cell_quoted_number() {
+    fn expression_quoted_number() {
         let input = "'42'";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Token("42".to_owned()));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Token("42".to_owned()));
     }
 
     #[test]
-    fn class_cell_quoted_space() {
+    fn expression_quoted_space() {
         let input = "' '";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Token(" ".to_owned()));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Token(" ".to_owned()));
     }
 
     #[test]
-    fn class_cell_quoted_punctuation() {
+    fn expression_quoted_punctuation() {
         let input = "'!@#$%^&*().-'";
-        let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == ClassCell::Token("!@#$%^&*().-".to_owned()));
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Token("!@#$%^&*().-".to_owned()));
     }
 
     #[test]
@@ -374,8 +374,8 @@ mod test {
         assert!(
             result.unwrap().1
                 == vec![
-                    ClassCell::Token("my_token".to_owned()),
-                    ClassCell::Integer(BigInt::from(42)),
+                    Expression::Token("my_token".to_owned()),
+                    Expression::Integer(BigInt::from(42)),
                 ]
         );
     }
@@ -384,7 +384,7 @@ mod test {
     fn class_row_1() {
         let input = "my_token";
         let result = all_consuming(class_row).parse(input);
-        assert!(result.unwrap().1 == vec![ClassCell::Token("my_token".to_owned()),]);
+        assert!(result.unwrap().1 == vec![Expression::Token("my_token".to_owned()),]);
     }
 
     #[test]
@@ -401,9 +401,9 @@ mod test {
         assert!(
             result.unwrap().1
                 == vec![
-                    ClassCell::Empty,
-                    ClassCell::Token("my_token".to_owned()),
-                    ClassCell::Integer(BigInt::from(42)),
+                    Expression::Empty,
+                    Expression::Token("my_token".to_owned()),
+                    Expression::Integer(BigInt::from(42)),
                 ]
         );
     }
@@ -415,9 +415,9 @@ mod test {
         assert!(
             result.unwrap().1
                 == vec![
-                    ClassCell::Token("my_token".to_owned()),
-                    ClassCell::Integer(BigInt::from(42)),
-                    ClassCell::Empty,
+                    Expression::Token("my_token".to_owned()),
+                    Expression::Integer(BigInt::from(42)),
+                    Expression::Empty,
                 ]
         );
     }
@@ -429,9 +429,9 @@ mod test {
         assert!(
             result.unwrap().1
                 == vec![
-                    ClassCell::Token("my_token".to_owned()),
-                    ClassCell::Empty,
-                    ClassCell::Integer(BigInt::from(42)),
+                    Expression::Token("my_token".to_owned()),
+                    Expression::Empty,
+                    Expression::Integer(BigInt::from(42)),
                 ]
         );
     }
@@ -440,7 +440,7 @@ mod test {
     fn class_row_just_colon() {
         let input = ":";
         let result = all_consuming(class_row).parse(input);
-        assert!(result.unwrap().1 == vec![ClassCell::Empty, ClassCell::Empty,]);
+        assert!(result.unwrap().1 == vec![Expression::Empty, Expression::Empty,]);
     }
 
     #[test]
@@ -450,7 +450,7 @@ mod test {
         assert!(
             result.unwrap().1
                 == ClassTable {
-                    header: vec![ClassCell::Token("foo".to_owned()),],
+                    header: vec![Expression::Token("foo".to_owned()),],
                     body: vec![],
                 }
         );
@@ -463,10 +463,10 @@ mod test {
         assert!(
             result.unwrap().1
                 == ClassTable {
-                    header: vec![ClassCell::Token("foo".to_owned()),],
+                    header: vec![Expression::Token("foo".to_owned()),],
                     body: vec![vec![
-                        ClassCell::Token("my_field".to_owned()),
-                        ClassCell::Token("i32".to_owned()),
+                        Expression::Token("my_field".to_owned()),
+                        Expression::Token("i32".to_owned()),
                     ]],
                 }
         );
@@ -479,10 +479,10 @@ mod test {
         assert!(
             result.unwrap().1
                 == ClassTable {
-                    header: vec![ClassCell::Token("foo".to_owned()),],
+                    header: vec![Expression::Token("foo".to_owned()),],
                     body: vec![vec![
-                        ClassCell::Token("my_field".to_owned()),
-                        ClassCell::Token("i32".to_owned()),
+                        Expression::Token("my_field".to_owned()),
+                        Expression::Token("i32".to_owned()),
                     ]],
                 }
         );
@@ -502,15 +502,15 @@ mod test {
         assert!(
             result.unwrap().1
                 == ClassTable {
-                    header: vec![ClassCell::Token("foo".to_owned()),],
+                    header: vec![Expression::Token("foo".to_owned()),],
                     body: vec![
                         vec![
-                            ClassCell::Token("my_field".to_owned()),
-                            ClassCell::Token("i32".to_owned()),
+                            Expression::Token("my_field".to_owned()),
+                            Expression::Token("i32".to_owned()),
                         ],
                         vec![
-                            ClassCell::Token("my_other_field".to_owned()),
-                            ClassCell::Token("f64".to_owned()),
+                            Expression::Token("my_other_field".to_owned()),
+                            Expression::Token("f64".to_owned()),
                         ]
                     ],
                 }
@@ -525,8 +525,8 @@ mod test {
             result.unwrap().1
                 == ClassTable {
                     header: vec![
-                        ClassCell::Token("foo".to_owned()),
-                        ClassCell::Token("bar".to_owned())
+                        Expression::Token("foo".to_owned()),
+                        Expression::Token("bar".to_owned())
                     ],
                     body: vec![],
                 }
@@ -537,7 +537,7 @@ mod test {
     fn statement_expr() {
         let input = "2";
         let result = all_consuming(statement).parse(input);
-        assert!(result.unwrap().1 == Statement::Expr(ClassCell::Integer(BigInt::from(2))));
+        assert!(result.unwrap().1 == Statement::Expr(Expression::Integer(BigInt::from(2))));
     }
 
     #[test]
@@ -547,8 +547,8 @@ mod test {
         assert!(
             result.unwrap().1
                 == Statement::Let(
-                    vec![ClassCell::Token("x".to_owned())],
-                    ClassCell::Integer(BigInt::from(2))
+                    vec![Expression::Token("x".to_owned())],
+                    Expression::Integer(BigInt::from(2))
                 )
         );
     }
@@ -560,10 +560,10 @@ mod test {
         assert!(
             result.unwrap().1
                 == Function {
-                    header: vec![ClassCell::Token("my_function".to_owned()),],
+                    header: vec![Expression::Token("my_function".to_owned()),],
                     params: vec![],
-                    ret: vec![ClassCell::Token("u32".to_owned()),],
-                    body: vec![Statement::Expr(ClassCell::Integer(BigInt::from(2)))],
+                    ret: vec![Expression::Token("u32".to_owned()),],
+                    body: vec![Statement::Expr(Expression::Integer(BigInt::from(2)))],
                 }
         );
     }
@@ -575,19 +575,19 @@ mod test {
         assert!(
             result.unwrap().1
                 == Function {
-                    header: vec![ClassCell::Token("my_function".to_owned()),],
+                    header: vec![Expression::Token("my_function".to_owned()),],
                     params: vec![
                         vec![
-                            ClassCell::Token("arg1".to_owned()),
-                            ClassCell::Token("i32".to_owned())
+                            Expression::Token("arg1".to_owned()),
+                            Expression::Token("i32".to_owned())
                         ],
                         vec![
-                            ClassCell::Token("arg2".to_owned()),
-                            ClassCell::Token("f64".to_owned())
+                            Expression::Token("arg2".to_owned()),
+                            Expression::Token("f64".to_owned())
                         ],
                     ],
-                    ret: vec![ClassCell::Token("u32".to_owned()),],
-                    body: vec![Statement::Expr(ClassCell::Integer(BigInt::from(2)))],
+                    ret: vec![Expression::Token("u32".to_owned()),],
+                    body: vec![Statement::Expr(Expression::Integer(BigInt::from(2)))],
                 }
         );
     }
