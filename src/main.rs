@@ -14,5 +14,5 @@ fn main() {
     let args = Args::parse();
     let text = fs::read_to_string(args.input).expect("Failed to read input file");
     let program = interpreter::parse::parse(&text);
-    println!("Hello, {:?}!", program);
+    println!("{:?}  ", program);
 }

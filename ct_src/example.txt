@@ -1,1 +1,3 @@
-class Foo {}
+fn main() -> u32 {
+    2u32
+}

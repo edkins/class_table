@@ -1,0 +1,5 @@
+class 'class' : syntax : keyword {}
+class ':' : syntax : punctuation {}
+class ',' : syntax : punctuation {}
+class '}' : syntax : punctuation {}
+class '{' : syntax : punctuation {}

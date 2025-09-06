@@ -1,0 +1,11 @@
+class instruction : metaclass {
+    opcode : u8 : header,
+    name : token : column,
+    type : wasmtype : column,
+}
+
+class 'i32.const' : instruction : 0x41 {
+    n : u32,
+}
+
+class 'i32.add' : instruction : 0x6A {}

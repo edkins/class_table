@@ -1,15 +1,18 @@
 use nom::{
-    branch::alt, bytes::complete::{tag, take_while, take_while1}, character::complete::multispace0, combinator::{all_consuming, map, opt, value}, multi::{many0, separated_list1}, sequence::{delimited, terminated}, IResult, Parser
+    branch::alt, bytes::complete::{tag, take_while, take_while1}, character::complete::multispace0, combinator::{all_consuming, map, opt, value}, multi::{many0, separated_list0, separated_list1}, sequence::{delimited, preceded, terminated}, IResult, Parser
 };
 use num_bigint::BigInt;
+use num_traits::cast::ToPrimitive;
 
-use crate::interpreter::ast::{ClassCell, ClassTable, Declaration, ProgramFile};
+use crate::interpreter::ast::{ClassCell, ClassTable, Declaration, Function, ProgramFile, Statement};
 
 #[derive(Debug, PartialEq, Clone, Eq)]
 enum Word {
     Class,
+    Fn,
     Token(String),
     Integer(BigInt),
+    U32(u32),
 }
 
 fn colon(input: &str) -> IResult<&str, ()> {
@@ -20,12 +23,61 @@ fn comma(input: &str) -> IResult<&str, ()> {
     value((), terminated(tag(","), multispace0)).parse(input)
 }
 
+fn semicolon(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag(";"), multispace0)).parse(input)
+}
+
 fn open_brace(input: &str) -> IResult<&str, ()> {
     value((), terminated(tag("{"), multispace0)).parse(input)
 }
 
 fn close_brace(input: &str) -> IResult<&str, ()> {
     value((), terminated(tag("}"), multispace0)).parse(input)
+}
+
+fn open_paren(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag("("), multispace0)).parse(input)
+}
+
+fn close_paren(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag(")"), multispace0)).parse(input)
+}
+
+fn arrow(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag("->"), multispace0)).parse(input)
+}
+
+enum Precision {
+    Big,
+    U32,
+}
+
+fn parse_number(mut string: &str) -> Option<Word> {
+    let precision = if string.ends_with("u32") {
+        string = string.trim_end_matches("u32");
+        Precision::U32
+    } else {
+        Precision::Big
+    };
+
+    let n = if string.starts_with("0x") {
+        match BigInt::parse_bytes(string[2..].as_bytes(), 16) {
+            Some(n) => n,
+            None => return None,
+        }
+    } else if string.chars().next().unwrap().is_ascii_digit() {
+        match string.parse::<BigInt>() {
+            Ok(n) => n,
+            Err(_) => return None,
+        }
+    } else {
+        return None;
+    };
+
+    match precision {
+        Precision::U32 => Some(Word::U32(n.to_u32().unwrap())), // Safe unwrap because we checked above
+        Precision::Big => Some(Word::Integer(n)),
+    }
 }
 
 fn unquoted_word(input: &str) -> IResult<&str, Word> {
@@ -36,14 +88,16 @@ fn unquoted_word(input: &str) -> IResult<&str, Word> {
     .parse(input)?;
     match t {
         "class" => Ok((input, Word::Class)),
+        "fn" => Ok((input, Word::Fn)),
         _ => {
             if t.chars().next().unwrap().is_ascii_digit() {
-                match t.parse::<BigInt>() {
-                    Ok(n) => Ok((input, Word::Integer(n))),
-                    Err(_) => Err(nom::Err::Error(nom::error::Error::new(
+                if let Some(n) = parse_number(t) {
+                    Ok((input, n))
+                } else {
+                    Err(nom::Err::Error(nom::error::Error::new(
                         input,
                         nom::error::ErrorKind::Digit,
-                    ))),
+                    )))
                 }
             } else {
                 Ok((input, Word::Token(t.to_owned())))
@@ -85,6 +139,7 @@ fn class_cell(input: &str) -> IResult<&str, ClassCell> {
         None => Ok((input, ClassCell::Empty)),
         Some(Word::Token(x)) => Ok((input, ClassCell::Token(x))),
         Some(Word::Integer(n)) => Ok((input, ClassCell::Integer(n))),
+        Some(Word::U32(n)) => Ok((input, ClassCell::U32(n))),
         _ => Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
@@ -113,9 +168,28 @@ fn class_table(input: &str) -> IResult<&str, ClassTable> {
     Ok((input, ClassTable { header, body: body.unwrap_or_default() }))
 }
 
+fn expr_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, expr) = class_cell(input)?;
+    Ok((input, Statement::Expr(expr)))
+}
+
+fn statement(input: &str) -> IResult<&str, Statement> {
+    alt((expr_statement,)).parse(input)
+}
+
+fn function(input: &str) -> IResult<&str, Function> {
+    let (input, _) = specific_word(Word::Fn).parse(input)?;
+    let (input, header) = class_row(input)?;
+    let (input, params) = delimited(open_paren, separated_list0(comma, class_row), close_paren).parse(input)?;
+    let (input, ret) = preceded(arrow, class_row).parse(input)?;
+    let (input, body) = delimited(open_brace, separated_list1(semicolon, statement), close_brace).parse(input)?;
+    Ok((input, Function { header, params, ret, body }))
+}
+
 fn declaration(input: &str) -> IResult<&str, Declaration> {
     alt((
         map(class_table, Declaration::Class),
+        map(function, Declaration::Fn)
     )).parse(input)
 }
 
@@ -151,6 +225,41 @@ mod test {
         let input = "42";
         let result = all_consuming(class_cell).parse(input);
         assert!(result.unwrap().1 == ClassCell::Integer(BigInt::from(42)));
+    }
+
+    #[test]
+    fn class_cell_hex() {
+        let input = "0x2A";
+        let result = all_consuming(class_cell).parse(input);
+        assert!(result.unwrap().1 == ClassCell::Integer(BigInt::from(42)));
+    }
+
+    #[test]
+    fn class_cell_hex_lower() {
+        let input = "0x2a";
+        let result = all_consuming(class_cell).parse(input);
+        assert!(result.unwrap().1 == ClassCell::Integer(BigInt::from(42)));
+    }
+
+    #[test]
+    fn class_cell_hex_empty_error() {
+        let input = "0x";
+        let result = all_consuming(class_cell).parse(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn class_cell_u32() {
+        let input = "42u32";
+        let result = all_consuming(class_cell).parse(input);
+        assert!(result.unwrap().1 == ClassCell::U32(42));
+    }
+
+    #[test]
+    fn class_cell_hex_u32() {
+        let input = "0x2Au32";
+        let result = all_consuming(class_cell).parse(input);
+        assert!(result.unwrap().1 == ClassCell::U32(42));
     }
 
     #[test]
@@ -230,7 +339,7 @@ mod test {
     }
 
     #[test]
-    fn class_row_0() {
+    fn class_row_0_error() {
         let input = "";
         let result = all_consuming(class_row).parse(input);
         assert!(result.is_err());
@@ -365,6 +474,49 @@ mod test {
                 == ClassTable {
                     header: vec![ClassCell::Token("foo".to_owned()),ClassCell::Token("bar".to_owned())],
                     body: vec![],
+                }
+        );
+    }
+
+    #[test]
+    fn statement_expr() {
+        let input = "2";
+        let result = all_consuming(statement).parse(input);
+        assert!(
+            result.unwrap().1
+                == Statement::Expr(ClassCell::Integer(BigInt::from(2)))
+        );
+    }
+
+    #[test]
+    fn fn_expr() {
+        let input = "fn my_function() -> u32 { 2 }";
+        let result = all_consuming(function).parse(input);
+        assert!(
+            result.unwrap().1
+                == Function {
+                    header: vec![ClassCell::Token("my_function".to_owned()),],
+                    params: vec![],
+                    ret: vec![ClassCell::Token("u32".to_owned()),],
+                    body: vec![Statement::Expr(ClassCell::Integer(BigInt::from(2)))],
+                }
+        );
+    }
+
+    #[test]
+    fn fn_args() {
+        let input = "fn my_function(arg1: i32, arg2: f64) -> u32 { 2 }";
+        let result = all_consuming(function).parse(input);
+        assert!(
+            result.unwrap().1
+                == Function {
+                    header: vec![ClassCell::Token("my_function".to_owned()),],
+                    params: vec![
+                        vec![ClassCell::Token("arg1".to_owned()), ClassCell::Token("i32".to_owned())],
+                        vec![ClassCell::Token("arg2".to_owned()), ClassCell::Token("f64".to_owned())],
+                    ],
+                    ret: vec![ClassCell::Token("u32".to_owned()),],
+                    body: vec![Statement::Expr(ClassCell::Integer(BigInt::from(2)))],
                 }
         );
     }

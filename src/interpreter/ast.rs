@@ -5,6 +5,7 @@ pub enum ClassCell {
     Empty,
     Token(String),
     Integer(BigInt),
+    U32(u32),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
@@ -14,8 +15,22 @@ pub struct ClassTable {
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
+pub enum Statement {
+    Expr(ClassCell),
+}
+
+#[derive(Debug, PartialEq, Clone, Eq)]
+pub struct Function {
+    pub header: Vec<ClassCell>,
+    pub params: Vec<Vec<ClassCell>>,
+    pub ret: Vec<ClassCell>,
+    pub body: Vec<Statement>,
+}
+
+#[derive(Debug, PartialEq, Clone, Eq)]
 pub enum Declaration {
     Class(ClassTable),
+    Fn(Function),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
