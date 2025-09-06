@@ -1,4 +1,12 @@
+class Foo {
+    x : u32,
+    y : u32,
+}
+
 fn main() -> u32 {
-    let x = 2u32;
-    x
+    let f = Foo {
+        x: 2u32,
+        y: 3u32,
+    };
+    f.x
 }

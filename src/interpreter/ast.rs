@@ -7,6 +7,7 @@ pub enum Expression {
     Integer(BigInt),
     U32(u32),
     MemberAccess(Box<Expression>, String),
+    Build(Box<Expression>, Vec<Vec<Expression>>),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]

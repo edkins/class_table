@@ -169,6 +169,7 @@ fn expression_word(input: &str) -> IResult<&str, Expression> {
 
 enum ExpressionSuffix {
     Field(String),
+    Build(Vec<Vec<Expression>>),
 }
 
 impl ExpressionSuffix {
@@ -176,6 +177,9 @@ impl ExpressionSuffix {
         match self {
             ExpressionSuffix::Field(name) => {
                 Expression::MemberAccess(Box::new(base), name)
+            }
+            ExpressionSuffix::Build(fields) => {
+                Expression::Build(Box::new(base), fields)
             }
         }
     }
@@ -192,21 +196,50 @@ fn expression_field_suffix(input: &str) -> IResult<&str, ExpressionSuffix> {
     }
 }
 
-fn expression_suffix(input: &str) -> IResult<&str, ExpressionSuffix> {
-    alt((expression_field_suffix,)).parse(input)
+fn expression_build_suffix(input: &str) -> IResult<&str, ExpressionSuffix> {
+    map(expression_table, ExpressionSuffix::Build).parse(input)
+}
+
+fn expression_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, ExpressionSuffix> {
+    move |input| {
+        if curly {
+            alt((expression_field_suffix, expression_build_suffix)).parse(input)
+        } else {
+            alt((expression_field_suffix,)).parse(input)
+        }
+    }
+}
+
+fn expression_base_inner(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
+    move |input| {
+        let (input, mut base) = expression_word(input)?;
+        let (input, suffixes) = many0(expression_suffix(curly)).parse(input)?;
+        for suffix in suffixes.into_iter() {
+            base = suffix.apply(base);
+        }
+        Ok((input, base))
+    }
+}
+
+fn expression_base(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
+    move |input| alt((
+        delimited(open_paren, expression_base_inner(true), close_paren),
+        expression_base_inner(curly)
+    )).parse(input)
 }
 
 fn expression(input: &str) -> IResult<&str, Expression> {
-    let (input, mut base) = expression_word(input)?;
-    let (input, suffixes) = many0(expression_suffix).parse(input)?;
-    for suffix in suffixes.into_iter() {
-        base = suffix.apply(base);
-    }
+    let (input, base) = expression_base(true)(input)?;
+    Ok((input, base))
+}
+
+fn class_cell(input: &str) -> IResult<&str, Expression> {
+    let (input, base) = expression_base(false)(input)?;
     Ok((input, base))
 }
 
 fn class_row(input: &str) -> IResult<&str, Vec<Expression>> {
-    let (input, result) = separated_list1(colon, expression).parse(input)?;
+    let (input, result) = separated_list1(colon, class_cell).parse(input)?;
     // Don't allow a single empty cell (this would correspond to an empty input)
     if result == vec![Expression::Empty] {
         Err(nom::Err::Error(nom::error::Error::new(
@@ -218,20 +251,19 @@ fn class_row(input: &str) -> IResult<&str, Vec<Expression>> {
     }
 }
 
+fn expression_table(input: &str) -> IResult<&str, Vec<Vec<Expression>>> {
+    map(delimited(open_brace, opt(terminated(separated_list1(comma, class_row), opt(comma))), close_brace), Option::unwrap_or_default).parse(input)
+}
+
 fn class_table(input: &str) -> IResult<&str, ClassTable> {
     let (input, _) = specific_word(Word::Class).parse(input)?;
     let (input, header) = class_row(input)?;
-    let (input, body) = delimited(
-        open_brace,
-        opt(terminated(separated_list1(comma, class_row), opt(comma))),
-        close_brace,
-    )
-    .parse(input)?;
+    let (input, body) = expression_table(input)?;
     Ok((
         input,
         ClassTable {
             header,
-            body: body.unwrap_or_default(),
+            body,
         },
     ))
 }
@@ -430,6 +462,49 @@ mod test {
     }
 
     #[test]
+    fn expression_build_empty() {
+        let input = "Foo {}";
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Build(Box::new(Expression::Token("Foo".to_owned())), vec![]));
+    }
+
+    #[test]
+    fn expression_build_1() {
+        let input = "Foo { bar: 42 }";
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Build(Box::new(Expression::Token("Foo".to_owned())), vec![
+            vec![Expression::Token("bar".to_owned()), Expression::Integer(BigInt::from(42))],
+        ]));
+    }
+
+    #[test]
+    fn expression_build_2() {
+        let input = "Foo { bar: 42, baz: 43 }";
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Build(Box::new(Expression::Token("Foo".to_owned())), vec![
+            vec![Expression::Token("bar".to_owned()), Expression::Integer(BigInt::from(42))],
+            vec![Expression::Token("baz".to_owned()), Expression::Integer(BigInt::from(43))],
+        ]));
+    }
+
+    #[test]
+    fn class_cell_build_error() {
+        let input = "Foo { bar: 42, baz: 43 }";
+        let result = all_consuming(class_cell).parse(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn class_cell_build_paren() {
+        let input = "(Foo { bar: 42, baz: 43 })";
+        let result = all_consuming(class_cell).parse(input);
+        assert!(result.unwrap().1 == Expression::Build(Box::new(Expression::Token("Foo".to_owned())), vec![
+            vec![Expression::Token("bar".to_owned()), Expression::Integer(BigInt::from(42))],
+            vec![Expression::Token("baz".to_owned()), Expression::Integer(BigInt::from(43))],
+        ]));
+    }
+
+    #[test]
     fn class_row_2() {
         let input = "my_token:42";
         let result = all_consuming(class_row).parse(input);
@@ -503,6 +578,13 @@ mod test {
         let input = ":";
         let result = all_consuming(class_row).parse(input);
         assert!(result.unwrap().1 == vec![Expression::Empty, Expression::Empty,]);
+    }
+
+    #[test]
+    fn expression_table_empty() {
+        let input = "{}";
+        let result = all_consuming(expression_table).parse(input);
+        assert!(result.unwrap().1.is_empty());
     }
 
     #[test]
