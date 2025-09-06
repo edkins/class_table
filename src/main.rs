@@ -14,5 +14,7 @@ fn main() {
     let args = Args::parse();
     let text = fs::read_to_string(args.input).expect("Failed to read input file");
     let program = interpreter::parse::parse(&text);
-    println!("{:?}  ", program);
+    let mut env = interpreter::env::Env::new();
+    let result = env.run(&program, "main", &[]);
+    println!("{:?}  ", result);
 }

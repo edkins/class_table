@@ -1,10 +1,18 @@
 use nom::{
-    branch::alt, bytes::complete::{tag, take_while, take_while1}, character::complete::multispace0, combinator::{all_consuming, map, opt, value}, multi::{many0, separated_list0, separated_list1}, sequence::{delimited, preceded, terminated}, IResult, Parser
+    IResult, Parser,
+    branch::alt,
+    bytes::complete::{tag, take_while, take_while1},
+    character::complete::multispace0,
+    combinator::{all_consuming, map, opt, value},
+    multi::{many0, separated_list0, separated_list1},
+    sequence::{delimited, preceded, terminated},
 };
 use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
 
-use crate::interpreter::ast::{ClassCell, ClassTable, Declaration, Function, ProgramFile, Statement};
+use crate::interpreter::ast::{
+    ClassCell, ClassTable, Declaration, Function, ProgramFile, Statement,
+};
 
 #[derive(Debug, PartialEq, Clone, Eq)]
 enum Word {
@@ -163,9 +171,19 @@ fn class_row(input: &str) -> IResult<&str, Vec<ClassCell>> {
 fn class_table(input: &str) -> IResult<&str, ClassTable> {
     let (input, _) = specific_word(Word::Class).parse(input)?;
     let (input, header) = class_row(input)?;
-    let (input, body) =
-        delimited(open_brace, opt(terminated(separated_list1(comma, class_row), opt(comma))), close_brace).parse(input)?;
-    Ok((input, ClassTable { header, body: body.unwrap_or_default() }))
+    let (input, body) = delimited(
+        open_brace,
+        opt(terminated(separated_list1(comma, class_row), opt(comma))),
+        close_brace,
+    )
+    .parse(input)?;
+    Ok((
+        input,
+        ClassTable {
+            header,
+            body: body.unwrap_or_default(),
+        },
+    ))
 }
 
 fn expr_statement(input: &str) -> IResult<&str, Statement> {
@@ -180,17 +198,32 @@ fn statement(input: &str) -> IResult<&str, Statement> {
 fn function(input: &str) -> IResult<&str, Function> {
     let (input, _) = specific_word(Word::Fn).parse(input)?;
     let (input, header) = class_row(input)?;
-    let (input, params) = delimited(open_paren, separated_list0(comma, class_row), close_paren).parse(input)?;
+    let (input, params) =
+        delimited(open_paren, separated_list0(comma, class_row), close_paren).parse(input)?;
     let (input, ret) = preceded(arrow, class_row).parse(input)?;
-    let (input, body) = delimited(open_brace, separated_list1(semicolon, statement), close_brace).parse(input)?;
-    Ok((input, Function { header, params, ret, body }))
+    let (input, body) = delimited(
+        open_brace,
+        separated_list1(semicolon, statement),
+        close_brace,
+    )
+    .parse(input)?;
+    Ok((
+        input,
+        Function {
+            header,
+            params,
+            ret,
+            body,
+        },
+    ))
 }
 
 fn declaration(input: &str) -> IResult<&str, Declaration> {
     alt((
         map(class_table, Declaration::Class),
-        map(function, Declaration::Fn)
-    )).parse(input)
+        map(function, Declaration::Fn),
+    ))
+    .parse(input)
 }
 
 fn program_file(input: &str) -> IResult<&str, ProgramFile> {
@@ -454,13 +487,16 @@ mod test {
             result.unwrap().1
                 == ClassTable {
                     header: vec![ClassCell::Token("foo".to_owned()),],
-                    body: vec![vec![
-                        ClassCell::Token("my_field".to_owned()),
-                        ClassCell::Token("i32".to_owned()),
-                    ], vec![
-                        ClassCell::Token("my_other_field".to_owned()),
-                        ClassCell::Token("f64".to_owned()),
-                    ]],
+                    body: vec![
+                        vec![
+                            ClassCell::Token("my_field".to_owned()),
+                            ClassCell::Token("i32".to_owned()),
+                        ],
+                        vec![
+                            ClassCell::Token("my_other_field".to_owned()),
+                            ClassCell::Token("f64".to_owned()),
+                        ]
+                    ],
                 }
         );
     }
@@ -472,7 +508,10 @@ mod test {
         assert!(
             result.unwrap().1
                 == ClassTable {
-                    header: vec![ClassCell::Token("foo".to_owned()),ClassCell::Token("bar".to_owned())],
+                    header: vec![
+                        ClassCell::Token("foo".to_owned()),
+                        ClassCell::Token("bar".to_owned())
+                    ],
                     body: vec![],
                 }
         );
@@ -482,10 +521,7 @@ mod test {
     fn statement_expr() {
         let input = "2";
         let result = all_consuming(statement).parse(input);
-        assert!(
-            result.unwrap().1
-                == Statement::Expr(ClassCell::Integer(BigInt::from(2)))
-        );
+        assert!(result.unwrap().1 == Statement::Expr(ClassCell::Integer(BigInt::from(2))));
     }
 
     #[test]
@@ -512,8 +548,14 @@ mod test {
                 == Function {
                     header: vec![ClassCell::Token("my_function".to_owned()),],
                     params: vec![
-                        vec![ClassCell::Token("arg1".to_owned()), ClassCell::Token("i32".to_owned())],
-                        vec![ClassCell::Token("arg2".to_owned()), ClassCell::Token("f64".to_owned())],
+                        vec![
+                            ClassCell::Token("arg1".to_owned()),
+                            ClassCell::Token("i32".to_owned())
+                        ],
+                        vec![
+                            ClassCell::Token("arg2".to_owned()),
+                            ClassCell::Token("f64".to_owned())
+                        ],
                     ],
                     ret: vec![ClassCell::Token("u32".to_owned()),],
                     body: vec![Statement::Expr(ClassCell::Integer(BigInt::from(2)))],
