@@ -17,6 +17,7 @@ pub struct ClassTable {
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub enum Statement {
     Expr(ClassCell),
+    Let(Vec<ClassCell>, ClassCell),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]

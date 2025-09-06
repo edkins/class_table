@@ -1,8 +1,16 @@
+use std::collections::HashMap;
+
 use num_bigint::BigInt;
 
 use crate::interpreter::ast::{ClassCell, Declaration, Function, ProgramFile, Statement};
 
-pub struct Env {}
+pub struct Env {
+    vars: HashMap<String, VarValue>,
+}
+
+struct VarValue {
+    value: Value,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -32,7 +40,9 @@ impl Function {
 
 impl Env {
     pub fn new() -> Self {
-        Env {}
+        Env {
+            vars: HashMap::new(),
+        }
     }
 
     pub fn run(&mut self, program: &ProgramFile, func: &str, args: &[Value]) -> Value {
@@ -46,16 +56,37 @@ impl Env {
         result
     }
 
+    fn create_var(&mut self, name: String, value: Value) {
+        self.vars.insert(name, VarValue { value });
+    }
+
+    fn lookup_var(&self, name: &str) -> Option<&Value> {
+        self.vars.get(name).map(|var| &var.value)
+    }
+
     pub fn eval_stmt(&mut self, stmt: &Statement) -> Value {
         match stmt {
             Statement::Expr(expr) => self.eval_expr(expr),
+            Statement::Let(var, expr) => {
+                let value = self.eval_expr(expr);
+                match var.as_slice() {
+                    &[ClassCell::Token(ref x)] => {
+                        self.create_var(x.clone(), value);
+                        Value::Unit
+                    }
+                    _ => panic!("Unsupported variable in let statement"),
+                }
+            }
         }
     }
 
     pub fn eval_expr(&mut self, expr: &ClassCell) -> Value {
         match expr {
             ClassCell::Empty => Value::Unit,
-            ClassCell::Token(s) => unimplemented!("Variable lookup for {}", s),
+            ClassCell::Token(s) => self
+                .lookup_var(s)
+                .cloned()
+                .unwrap_or_else(|| panic!("Variable {} not found", s)),
             ClassCell::Integer(n) => Value::Number(n.clone()),
             ClassCell::U32(n) => Value::U32(*n),
         }

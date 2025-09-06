@@ -3,7 +3,7 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, take_while, take_while1},
     character::complete::multispace0,
-    combinator::{all_consuming, map, opt, value},
+    combinator::{all_consuming, map, not, opt, value},
     multi::{many0, separated_list0, separated_list1},
     sequence::{delimited, preceded, terminated},
 };
@@ -18,6 +18,7 @@ use crate::interpreter::ast::{
 enum Word {
     Class,
     Fn,
+    Let,
     Token(String),
     Integer(BigInt),
     U32(u32),
@@ -55,6 +56,15 @@ fn arrow(input: &str) -> IResult<&str, ()> {
     value((), terminated(tag("->"), multispace0)).parse(input)
 }
 
+fn equals(input: &str) -> IResult<&str, ()> {
+    value(
+        (),
+        terminated(terminated(tag("="), not(tag("="))), multispace0),
+    )
+    .parse(input)
+    //    value((), terminated(tag("="), multispace0)).parse(input)
+}
+
 enum Precision {
     Big,
     U32,
@@ -68,11 +78,8 @@ fn parse_number(mut string: &str) -> Option<Word> {
         Precision::Big
     };
 
-    let n = if string.starts_with("0x") {
-        match BigInt::parse_bytes(string[2..].as_bytes(), 16) {
-            Some(n) => n,
-            None => return None,
-        }
+    let n = if let Some(rest) = string.strip_prefix("0x") {
+        BigInt::parse_bytes(rest.as_bytes(), 16)?
     } else if string.chars().next().unwrap().is_ascii_digit() {
         match string.parse::<BigInt>() {
             Ok(n) => n,
@@ -97,6 +104,7 @@ fn unquoted_word(input: &str) -> IResult<&str, Word> {
     match t {
         "class" => Ok((input, Word::Class)),
         "fn" => Ok((input, Word::Fn)),
+        "let" => Ok((input, Word::Let)),
         _ => {
             if t.chars().next().unwrap().is_ascii_digit() {
                 if let Some(n) = parse_number(t) {
@@ -191,8 +199,16 @@ fn expr_statement(input: &str) -> IResult<&str, Statement> {
     Ok((input, Statement::Expr(expr)))
 }
 
+fn let_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = specific_word(Word::Let).parse(input)?;
+    let (input, var) = class_row(input)?;
+    let (input, _) = equals(input)?;
+    let (input, expr) = class_cell(input)?;
+    Ok((input, Statement::Let(var, expr)))
+}
+
 fn statement(input: &str) -> IResult<&str, Statement> {
-    alt((expr_statement,)).parse(input)
+    alt((let_statement, expr_statement)).parse(input)
 }
 
 fn function(input: &str) -> IResult<&str, Function> {
@@ -522,6 +538,19 @@ mod test {
         let input = "2";
         let result = all_consuming(statement).parse(input);
         assert!(result.unwrap().1 == Statement::Expr(ClassCell::Integer(BigInt::from(2))));
+    }
+
+    #[test]
+    fn statement_let() {
+        let input = "let x = 2";
+        let result = all_consuming(statement).parse(input);
+        assert!(
+            result.unwrap().1
+                == Statement::Let(
+                    vec![ClassCell::Token("x".to_owned())],
+                    ClassCell::Integer(BigInt::from(2))
+                )
+        );
     }
 
     #[test]
