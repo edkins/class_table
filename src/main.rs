@@ -1,3 +1,18 @@
+use std::fs;
+
+use clap::Parser;
+
+mod interpreter;
+
+#[derive(Parser)]
+#[command(version, about)]
+struct Args {
+    input: String,
+}
+
 fn main() {
-    println!("Hello, world!");
+    let args = Args::parse();
+    let text = fs::read_to_string(args.input).expect("Failed to read input file");
+    let program = interpreter::parse::parse(&text);
+    println!("Hello, {:?}!", program);
 }
