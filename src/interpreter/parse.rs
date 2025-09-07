@@ -22,6 +22,7 @@ enum Word {
     Token(String),
     Integer(BigInt),
     U32(u32),
+    Str(String),
 }
 
 fn colon(input: &str) -> IResult<&str, ()> {
@@ -135,8 +136,17 @@ fn quoted_word(input: &str) -> IResult<&str, Word> {
     Ok((input, Word::Token(t.to_owned())))
 }
 
+fn double_quoted_word(input: &str) -> IResult<&str, Word> {
+    let (input, t) = terminated(
+        nom::sequence::delimited(tag("\""), take_while(|c| c != '\"'), tag("\"")),
+        multispace0,
+    )
+    .parse(input)?;
+    Ok((input, Word::Str(t.to_owned())))
+}
+
 fn word(input: &str) -> IResult<&str, Word> {
-    alt((quoted_word, unquoted_word)).parse(input)
+    alt((quoted_word, double_quoted_word, unquoted_word)).parse(input)
 }
 
 fn specific_word(expected: Word) -> impl Fn(&str) -> IResult<&str, ()> {
@@ -160,6 +170,7 @@ fn expression_word(input: &str) -> IResult<&str, Expression> {
         Some(Word::Token(x)) => Ok((input, Expression::Token(x))),
         Some(Word::Integer(n)) => Ok((input, Expression::Integer(n))),
         Some(Word::U32(n)) => Ok((input, Expression::U32(n))),
+        Some(Word::Str(s)) => Ok((input, Expression::Str(s))),
         _ => Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
@@ -440,6 +451,20 @@ mod test {
         let input = "'!@#$%^&*().-'";
         let result = all_consuming(expression).parse(input);
         assert!(result.unwrap().1 == Expression::Token("!@#$%^&*().-".to_owned()));
+    }
+
+    #[test]
+    fn expression_string_empty() {
+        let input = "\"\"";
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Str("".to_owned()));
+    }
+
+    #[test]
+    fn expression_string() {
+        let input = "\"hello world\"";
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Str("hello world".to_owned()));
     }
 
     #[test]

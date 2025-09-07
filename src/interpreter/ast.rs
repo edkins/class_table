@@ -6,6 +6,7 @@ pub enum Expression {
     Token(String),
     Integer(BigInt),
     U32(u32),
+    Str(String),
     MemberAccess(Box<Expression>, String),
     Build(Box<Expression>, Vec<Vec<Expression>>),
 }

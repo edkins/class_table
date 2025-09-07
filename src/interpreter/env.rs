@@ -20,6 +20,7 @@ pub enum Value {
     Unit,
     Number(BigInt),
     U32(u32),
+    Str(String),
     Struct(String, Vec<Value>),
 }
 
@@ -109,6 +110,7 @@ impl Env {
                 .unwrap_or_else(|| panic!("Variable {} not found", s)),
             Expression::Integer(n) => Value::Number(n.clone()),
             Expression::U32(n) => Value::U32(*n),
+            Expression::Str(s) => Value::Str(s.clone()),
             Expression::MemberAccess(base, field) => {
                 let base_val = self.eval_expr(base);
                 self.get_struct_member(base_val, field)
