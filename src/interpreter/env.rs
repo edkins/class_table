@@ -21,6 +21,7 @@ struct VarValue {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     Null,
+    Bool(bool),
     Number(BigInt),
     U32(u32),
     Str(String),
@@ -70,10 +71,68 @@ impl Env {
         None
     }
 
+    fn run_builtin(&self, func: &str, args: &[Value]) -> Option<Value> {
+        match func {
+            "==" => {
+                if args.len() != 2 {
+                    panic!("Invalid number of arguments for == operator");
+                }
+                let left = &args[0];
+                let right = &args[1];
+                Some(Value::Bool(left == right))
+            }
+            "!=" => {
+                if args.len() != 2 {
+                    panic!("Invalid number of arguments for != operator");
+                }
+                let left = &args[0];
+                let right = &args[1];
+                Some(Value::Bool(left != right))
+            }
+            "<" => {
+                if args.len() != 2 {
+                    panic!("Invalid number of arguments for < operator");
+                }
+                let left = &args[0];
+                let right = &args[1];
+                match (left, right) {
+                    (Value::Number(l), Value::Number(r)) => Some(Value::Bool(l < r)),
+                    (Value::U32(l), Value::U32(r)) => Some(Value::Bool(l < r)),
+                    _ => panic!("Invalid types for < operator"),
+                }
+            }
+            "len" => {
+                if args.len() != 1 {
+                    panic!("Invalid number of arguments for len function");
+                }
+                match &args[0] {
+                    Value::Str(s) => Some(Value::Number(s.len().into())),
+                    Value::List(l) => Some(Value::Number(l.len().into())),
+                    _ => panic!("Invalid type for len function"),
+                }
+            }
+            "startswith" => {
+                if args.len() != 2 {
+                    panic!("Invalid number of arguments for startswith function");
+                }
+                match (&args[0], &args[1]) {
+                    (Value::Str(s), Value::Str(prefix)) => Some(Value::Bool(s.starts_with(prefix))),
+                    _ => panic!("Invalid types for startswith function"),
+                }
+            }
+            _ => None
+        }
+    }
+
     pub fn run(&mut self, func: &str, args: &[Value]) -> Value {
+        // check builtin functions
+        if let Some(result) = self.run_builtin(func, args) {
+            return result;
+        }
+
         let function = self
             .lookup_fn(func)
-            .expect("Function not found")
+            .unwrap_or_else(|| panic!("Function not found: {}", func))
             .clone();
         function.check_args(args);
         for (arg, param) in args.iter().zip(&function.params) {
@@ -169,8 +228,23 @@ impl Env {
                     panic!("For loop expects a list");
                 }
             }
-            _ => {
-                unimplemented!("{:?}", stmt)
+            Statement::If(cond, then_body, else_body) => {
+                let condition = self.eval_expr(cond);
+                match condition {
+                    Value::Bool(true) => {
+                        for stmt in then_body {
+                            self.eval_stmt(stmt);
+                        }
+                    }
+                    Value::Bool(false) => {
+                        for stmt in else_body {
+                            self.eval_stmt(stmt);
+                        }
+                    }
+                    _ => {
+                        unimplemented!("{:?}", stmt)
+                    }
+                }
             }
         }
     }
@@ -208,6 +282,22 @@ impl Env {
                     self.eval_stmt(stmt);
                 }
                 self.eval_expr(expr)
+            }
+            Expression::And(left, right) => {
+                let left_val = self.eval_expr(left);
+                match left_val {
+                    Value::Bool(true) => self.eval_expr(right),
+                    Value::Bool(false) => Value::Bool(false),
+                    _ => panic!("Invalid type for && operator"),
+                }
+            }
+            Expression::Or(left, right) => {
+                let left_val = self.eval_expr(left);
+                match left_val {
+                    Value::Bool(true) => Value::Bool(true),
+                    Value::Bool(false) => self.eval_expr(right),
+                    _ => panic!("Invalid type for || operator"),
+                }
             }
             Expression::Call(f, args) => {
                 let func = self.to_name(f);

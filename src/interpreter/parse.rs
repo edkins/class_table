@@ -284,7 +284,7 @@ fn term_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, ExpressionSuffix> 
             ))
             .parse(input)
         } else {
-            alt((expression_field_suffix, expression_subscript_suffix)).parse(input)
+            alt((expression_field_suffix, expression_subscript_suffix, expression_call_suffix)).parse(input)
         }
     }
 }
@@ -307,7 +307,11 @@ struct BinopSuffix {
 
 impl BinopSuffix {
     fn apply(self, lhs: Expression) -> Expression {
-        Expression::Call(Box::new(Expression::Token(self.binop)), vec![lhs, self.rhs])
+        match &self.binop as &str {
+            "&&" => Expression::And(Box::new(lhs), Box::new(self.rhs)),
+            "||" => Expression::Or(Box::new(lhs), Box::new(self.rhs)),
+            _ => Expression::Call(Box::new(Expression::Token(self.binop)), vec![lhs, self.rhs]),
+        }
     }
 
     fn mapper(binop: &str) -> impl Fn(Expression) -> BinopSuffix {
@@ -503,7 +507,9 @@ fn expr_block(input: &str) -> IResult<&str, Expression> {
 
 fn function(input: &str) -> IResult<&str, Function> {
     let (input, _) = specific_word(Word::Fn).parse(input)?;
-    let (input, header) = class_row(input)?;
+    // TODO: function metaclasses specified by colon
+    // let (input, header) = class_row(input)?;
+    let (input, name) = expression_word(input)?;
     let (input, params) =
         delimited(open_paren, separated_list0(comma, class_row), close_paren).parse(input)?;
     let (input, ret) = preceded(arrow, class_row).parse(input)?;
@@ -511,7 +517,7 @@ fn function(input: &str) -> IResult<&str, Function> {
     Ok((
         input,
         Function {
-            header,
+            header: vec![name],
             params,
             ret,
             body,
@@ -1253,12 +1259,9 @@ mod test {
         let result = all_consuming(expression).parse(input);
         assert!(
             result.unwrap().1
-                == Expression::Call(
-                    Box::new(Expression::Token("||".to_owned())),
-                    vec![
-                        Expression::Token("x".to_owned()),
-                        Expression::Token("y".to_owned())
-                    ]
+                == Expression::Or(
+                    Box::new(Expression::Token("x".to_owned())),
+                    Box::new(Expression::Token("y".to_owned()))
                 )
         );
     }
@@ -1269,12 +1272,9 @@ mod test {
         let result = all_consuming(expression).parse(input);
         assert!(
             result.unwrap().1
-                == Expression::Call(
-                    Box::new(Expression::Token("&&".to_owned())),
-                    vec![
-                        Expression::Token("x".to_owned()),
-                        Expression::Token("y".to_owned())
-                    ]
+                == Expression::And(
+                    Box::new(Expression::Token("x".to_owned())),
+                    Box::new(Expression::Token("y".to_owned()))
                 )
         );
     }
@@ -1285,48 +1285,39 @@ mod test {
         let result = all_consuming(expression).parse(input);
         assert!(
             result.unwrap().1
-                == Expression::Call(
-                    Box::new(Expression::Token("||".to_owned())),
-                    vec![
-                        Expression::Call(
-                            Box::new(Expression::Token("&&".to_owned())),
+                == Expression::Or(
+                    Box::new(Expression::And(
+                        Box::new(Expression::Call(
+                            Box::new(Expression::Token("<".to_owned())),
                             vec![
-                                Expression::Call(
-                                    Box::new(Expression::Token("<".to_owned())),
-                                    vec![
-                                        Expression::Token("a".to_owned()),
-                                        Expression::Token("b".to_owned())
-                                    ]
-                                ),
-                                Expression::Call(
-                                    Box::new(Expression::Token("==".to_owned())),
-                                    vec![
-                                        Expression::Token("c".to_owned()),
-                                        Expression::Token("d".to_owned())
-                                    ]
-                                )
+                                Expression::Token("a".to_owned()),
+                                Expression::Token("b".to_owned())
                             ]
-                        ),
-                        Expression::Call(
-                            Box::new(Expression::Token("&&".to_owned())),
+                        )),
+                        Box::new(Expression::Call(
+                            Box::new(Expression::Token("==".to_owned())),
                             vec![
-                                Expression::Call(
-                                    Box::new(Expression::Token("==".to_owned())),
-                                    vec![
-                                        Expression::Token("e".to_owned()),
-                                        Expression::Token("f".to_owned())
-                                    ]
-                                ),
-                                Expression::Call(
-                                    Box::new(Expression::Token("!=".to_owned())),
-                                    vec![
-                                        Expression::Token("g".to_owned()),
-                                        Expression::Token("h".to_owned())
-                                    ]
-                                )
+                                Expression::Token("c".to_owned()),
+                                Expression::Token("d".to_owned())
                             ]
-                        )
-                    ]
+                        ))
+                    )),
+                    Box::new(Expression::And(
+                        Box::new(Expression::Call(
+                            Box::new(Expression::Token("==".to_owned())),
+                            vec![
+                                Expression::Token("e".to_owned()),
+                                Expression::Token("f".to_owned())
+                            ]
+                        )),
+                        Box::new(Expression::Call(
+                            Box::new(Expression::Token("!=".to_owned())),
+                            vec![
+                                Expression::Token("g".to_owned()),
+                                Expression::Token("h".to_owned())
+                            ]
+                        ))
+                    ))
                 )
         );
     }

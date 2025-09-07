@@ -11,6 +11,8 @@ pub enum Expression {
     MemberAccess(Box<Expression>, String),
     Subscript(Box<Expression>, Vec<Expression>),
     Call(Box<Expression>, Vec<Expression>),
+    And(Box<Expression>, Box<Expression>),
+    Or(Box<Expression>, Box<Expression>),
     Build(Box<Expression>, Vec<Vec<Expression>>),
     Block(Vec<Statement>, Box<Expression>),
 }

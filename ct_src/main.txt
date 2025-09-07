@@ -10,10 +10,14 @@ class keyword : metaclass {
 }
 
 fn parse_keyword(k : keyword, input: str) -> optional[split_str] {
-    split_str {
-        head: k.name,
-        tail: "foo",
+    let mut result = null;
+    if startswith(input, k.name) {
+        result = split_str {
+            head: k.name,
+            tail: "foo",
+        };
     }
+    result
 }
 
 fn parse_keywords(input: str) -> optional[split_str] {
@@ -21,7 +25,7 @@ fn parse_keywords(input: str) -> optional[split_str] {
     for k : keyword.classes {
         let suggestion = parse_keyword(k, input);
         if suggestion != null {
-            if best == null || suggestion.tail.len < best.tail.len {
+            if best == null || len(suggestion.tail) < len(best.tail) {
                 best = suggestion;
             }
         }
@@ -32,7 +36,10 @@ fn parse_keywords(input: str) -> optional[split_str] {
 class 'class' : keyword {}
 
 fn main(input: str) -> str {
-    let mut result = "";
+    let mut result = "unable to parse";
     let s = parse_keywords(input);
+    if s != null {
+        result = s.head;
+    }
     result
 }
