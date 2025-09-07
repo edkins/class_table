@@ -8,5 +8,5 @@ fn main(input: str) -> str {
         x: 2u32,
         y: 3u32,
     };
-    "hello"
+    input
 }

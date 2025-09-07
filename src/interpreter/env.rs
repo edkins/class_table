@@ -58,6 +58,11 @@ impl Env {
             .expect("Function not found")
             .clone();
         function.check_args(args);
+        for (arg, param) in args.iter().zip(&function.params) {
+            let name = self.typed_to_name(&param);
+            self.create_var(name, arg.clone());
+        }
+
         let mut result = Value::Unit;
         for stmt in &function.body {
             result = self.eval_stmt(stmt);
@@ -137,6 +142,13 @@ impl Env {
         match expr {
             Expression::Token(s) => s.clone(),
             _ => panic!("Expected token"),
+        }
+    }
+
+    fn typed_to_name(&self, expr: &[Expression]) -> String {
+        match expr {
+            [Expression::Token(s),_] => s.clone(),
+            _ => panic!("Expected typed token")
         }
     }
 
