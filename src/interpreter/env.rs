@@ -7,7 +7,8 @@ use crate::interpreter::ast::{
 };
 
 pub struct Env {
-    program: ProgramFile,
+    program: Vec<(String, ProgramFile)>,
+    current_module: String,
     vars: HashMap<String, VarValue>,
     stack: Vec<HashMap<String, VarValue>>,
 }
@@ -25,18 +26,16 @@ pub enum Value {
     Str(String),
     Struct(String, Vec<Value>),
     List(Vec<Value>),
-    Class(String),
+    Class(String, String),
 }
 
-impl ProgramFile {
-    pub fn lookup_fn(&self, name: &str) -> Option<&Function> {
-        let search_value = Expression::Token(name.to_owned());
-        self.declarations.iter().find_map(|decl| match decl {
-            Declaration::Fn(func) if func.header[0] == search_value => Some(func),
-            _ => None,
-        })
-    }
-}
+// pub struct LoadedClass {
+//     module_name: String,
+//     class_name: String,
+//     metaclass_module_name: String,
+//     metaclass_name: String,
+//     table: ClassTable,
+// }
 
 impl Function {
     fn check_args(&self, args: &[Value]) {
@@ -48,17 +47,31 @@ impl Function {
 }
 
 impl Env {
-    pub fn new(program: ProgramFile) -> Self {
+    pub fn new(module_name: &str, program: ProgramFile) -> Self {
         Env {
-            program,
+            program: vec![(module_name.to_owned(), program)],
+            current_module: module_name.to_owned(),
             vars: HashMap::new(),
             stack: Vec::new(),
         }
     }
 
+    pub fn lookup_fn(&self, name: &str) -> Option<&Function> {
+        let search_value = Expression::Token(name.to_owned());
+        for (_, program) in &self.program {
+            for decl in &program.declarations {
+                if let Declaration::Fn(func) = decl {
+                    if func.header[0] == search_value {
+                        return Some(func);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn run(&mut self, func: &str, args: &[Value]) -> Value {
         let function = self
-            .program
             .lookup_fn(func)
             .expect("Function not found")
             .clone();
@@ -85,7 +98,7 @@ impl Env {
         if local.is_some() {
             return local.cloned();
         }
-        self.lookup_class(name).map(|_| Value::Class(name.to_owned()))
+        self.lookup_class(name).map(|_| Value::Class(self.current_module.clone(), name.to_owned()))
     }
 
     fn remove_var(&mut self, name: &str) {
@@ -98,13 +111,18 @@ impl Env {
 
     fn lookup_class(&self, name: &str) -> Option<&ClassTable> {
         let search_value = Expression::Token(name.to_owned());
-        self.program
-            .declarations
-            .iter()
-            .find_map(|decl| match decl {
-                Declaration::Class(class) if class.header[0] == search_value => Some(class),
-                _ => None,
-            })
+        for (module_name, program) in &self.program {
+            if *module_name == self.current_module {
+                for decl in &program.declarations {
+                    if let Declaration::Class(class) = decl {
+                        if class.header[0] == search_value {
+                            return Some(class);
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn eval_stmt(&mut self, stmt: &Statement) {
@@ -240,31 +258,31 @@ impl Env {
                 let field_index = self.get_class_field_index(&class_name, field);
                 fields[field_index].clone()
             }
-            Value::Class(class_name) => {
+            Value::Class(module_name, class_name) => {
+                // TODO: consult metaclass
                 match field {
-                    "classes" => Value::List(self.list_classes(&class_name)),
-                    _ => panic!("Unknown class field {} for class {}", field, class_name),
+                    "name" => Value::Str(class_name),
+                    "classes" => Value::List(self.list_classes(&module_name, &class_name)),
+                    _ => panic!("Unknown class field {} for class {}::{}", field, module_name, class_name),
                 }
             }
             _ => panic!("Not a struct or class: {:?}", structure),
         }
     }
 
-    fn list_classes(&self, metaclass: &str) -> Vec<Value> {
+    fn list_classes(&self, metaclass_module: &str, metaclass: &str) -> Vec<Value> {
         let search_value = Expression::Token(metaclass.to_owned());
-        self.program
-            .declarations
-            .iter()
-            .filter_map(|decl| match decl {
-                Declaration::Class(class) if class.header.len() >= 2 && class.header[1] == search_value => {
-                    if let Expression::Token(ref name) = class.header[0] {
-                        Some(Value::Class(name.clone()))
-                    } else {
-                        None
+        let mut result = vec![];
+        for (module_name, program) in &self.program {
+            for decl in &program.declarations {
+                // TODO: also allow classes to have a metaclass in a different module
+                if let Declaration::Class(class) = decl && module_name == metaclass_module {
+                    if class.header.len() >= 2 && class.header[1] == search_value {
+                        result.push(Value::Class(module_name.clone(), self.to_name(&class.header[0])));
                     }
                 }
-                _ => None,
-            })
-            .collect()
+            }
+        }
+        result
     }
 }
