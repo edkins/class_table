@@ -19,6 +19,7 @@ enum Word {
     Class,
     Fn,
     Let,
+    Mut,
     Token(String),
     Integer(BigInt),
     U32(u32),
@@ -110,6 +111,7 @@ fn unquoted_word(input: &str) -> IResult<&str, Word> {
         "class" => Ok((input, Word::Class)),
         "fn" => Ok((input, Word::Fn)),
         "let" => Ok((input, Word::Let)),
+        "mut" => Ok((input, Word::Mut)),
         _ => {
             if t.chars().next().unwrap().is_ascii_digit() {
                 if let Some(n) = parse_number(t) {
@@ -290,11 +292,20 @@ fn let_statement(input: &str) -> IResult<&str, Statement> {
     let (input, var) = class_row(input)?;
     let (input, _) = equals(input)?;
     let (input, expr) = expression(input)?;
-    Ok((input, Statement::Let(var, expr)))
+    Ok((input, Statement::Let(var, expr, false)))
+}
+
+fn let_mut_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = specific_word(Word::Let).parse(input)?;
+    let (input, _) = specific_word(Word::Mut).parse(input)?;
+    let (input, var) = class_row(input)?;
+    let (input, _) = equals(input)?;
+    let (input, expr) = expression(input)?;
+    Ok((input, Statement::Let(var, expr, true)))
 }
 
 fn statement(input: &str) -> IResult<&str, Statement> {
-    alt((let_statement, expr_statement)).parse(input)
+    alt((let_mut_statement, let_statement, expr_statement)).parse(input)
 }
 
 fn function(input: &str) -> IResult<&str, Function> {
@@ -761,7 +772,22 @@ mod test {
             result.unwrap().1
                 == Statement::Let(
                     vec![Expression::Token("x".to_owned())],
-                    Expression::Integer(BigInt::from(2))
+                    Expression::Integer(BigInt::from(2)),
+                    false,
+                )
+        );
+    }
+
+    #[test]
+    fn statement_let_mut() {
+        let input = "let mut x = 2";
+        let result = all_consuming(statement).parse(input);
+        assert!(
+            result.unwrap().1
+                == Statement::Let(
+                    vec![Expression::Token("x".to_owned())],
+                    Expression::Integer(BigInt::from(2)),
+                    true,
                 )
         );
     }

@@ -1,0 +1,23 @@
+class split_string {
+    head : str,
+    tail : str,
+}
+
+class keyword : metaclass {
+    name : token : header,
+    metaclass : metaclass : header,
+}
+
+fn parse_keyword(k : keyword) -> split_string {
+    split_string {
+        head: k.name,
+        tail: "foo",
+    }
+}
+
+class 'class' : keyword {}
+
+fn main(input: str) -> str {
+    let mut result = "";
+    result
+}

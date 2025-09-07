@@ -13,6 +13,7 @@ pub struct Env {
 
 struct VarValue {
     value: Value,
+    mutable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,7 +61,7 @@ impl Env {
         function.check_args(args);
         for (arg, param) in args.iter().zip(&function.params) {
             let name = self.typed_to_name(&param);
-            self.create_var(name, arg.clone());
+            self.create_var(name, arg.clone(), false);
         }
 
         let mut result = Value::Unit;
@@ -71,8 +72,8 @@ impl Env {
         result
     }
 
-    fn create_var(&mut self, name: String, value: Value) {
-        self.vars.insert(name, VarValue { value });
+    fn create_var(&mut self, name: String, value: Value, mutable: bool) {
+        self.vars.insert(name, VarValue { value, mutable });
     }
 
     fn lookup_var(&self, name: &str) -> Option<&Value> {
@@ -93,11 +94,11 @@ impl Env {
     fn eval_stmt(&mut self, stmt: &Statement) -> Value {
         match stmt {
             Statement::Expr(expr) => self.eval_expr(expr),
-            Statement::Let(var, expr) => {
+            Statement::Let(var, expr, mutable) => {
                 let value = self.eval_expr(expr);
                 match var.as_slice() {
                     &[Expression::Token(ref x)] => {
-                        self.create_var(x.clone(), value);
+                        self.create_var(x.clone(), value, *mutable);
                         Value::Unit
                     }
                     _ => panic!("Unsupported variable in let statement"),

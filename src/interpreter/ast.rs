@@ -20,7 +20,7 @@ pub struct ClassTable {
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub enum Statement {
     Expr(Expression),
-    Let(Vec<Expression>, Expression),
+    Let(Vec<Expression>, Expression, bool),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
