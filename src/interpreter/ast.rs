@@ -4,6 +4,7 @@ use num_bigint::BigInt;
 pub enum Expression {
     Empty,
     Null,
+    Bool(bool),
     Token(String),
     Integer(BigInt),
     U32(u32),

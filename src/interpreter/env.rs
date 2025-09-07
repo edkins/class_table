@@ -1,6 +1,8 @@
+use core::panic;
 use std::{collections::HashMap, mem};
 
 use num_bigint::BigInt;
+use num_traits::ToPrimitive;
 
 use crate::interpreter::ast::{
     ClassTable, Declaration, Expression, Function, ProgramFile, Statement,
@@ -132,6 +134,20 @@ impl Env {
                     _ => panic!("Invalid types for startswith function"),
                 }
             }
+            "from" => {
+                if args.len() != 2 {
+                    panic!("Invalid number of arguments for from function");
+                }
+                match (&args[0], &args[1]) {
+                    (Value::Str(s), Value::Number(n)) => {
+                        Some(Value::Str(s[n.to_usize().unwrap()..].to_owned()))
+                    }
+                    (Value::Str(s), Value::U32(n)) => {
+                        Some(Value::Str(s[*n as usize..].to_owned()))
+                    }
+                    _ => panic!("Invalid types for from function"),
+                }
+            }
             _ => None
         }
     }
@@ -249,6 +265,7 @@ impl Env {
             Expression::Token(s) => self
                 .lookup_var_or_global(s)
                 .unwrap_or_else(|| panic!("Variable {} not found", s)),
+            Expression::Bool(b) => Value::Bool(*b),
             Expression::Integer(n) => Value::Number(n.clone()),
             Expression::U32(n) => Value::U32(*n),
             Expression::Str(s) => Value::Str(s.clone()),
@@ -317,7 +334,7 @@ impl Env {
                     }
                 }
             }
-            _ => unimplemented!("Expression type not supported"),
+            _ => unimplemented!("Expression type not supported: {:?}", expr),
         }
     }
 

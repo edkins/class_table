@@ -16,7 +16,7 @@ fn parse_keyword(k : keyword, input: str) -> optional[split_str] {
         result = split_str {
             head: k.name,
             specificity: 1,
-            tail: "foo",
+            tail: from(input, len(k.name)),
         };
     }
     result

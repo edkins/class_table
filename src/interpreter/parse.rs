@@ -1,11 +1,5 @@
 use nom::{
-    IResult, Parser,
-    branch::alt,
-    bytes::complete::{tag, take_while, take_while1},
-    character::complete::multispace0,
-    combinator::{all_consuming, map, not, opt, value},
-    multi::{many0, separated_list0, separated_list1},
-    sequence::{delimited, preceded, terminated},
+    branch::alt, bytes::complete::{tag, take_while, take_while1}, character::complete::multispace0, combinator::{all_consuming, map, not, opt, value}, multi::{many0, separated_list0, separated_list1}, sequence::{delimited, preceded, terminated}, IResult, Parser
 };
 use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
@@ -24,6 +18,8 @@ enum Word {
     If,
     Else,
     Null,
+    True,
+    False,
     Token(String),
     Integer(BigInt),
     U32(u32),
@@ -152,6 +148,8 @@ fn unquoted_word(input: &str) -> IResult<&str, Word> {
         "if" => Ok((input, Word::If)),
         "else" => Ok((input, Word::Else)),
         "null" => Ok((input, Word::Null)),
+        "true" => Ok((input, Word::True)),
+        "false" => Ok((input, Word::False)),
         _ => {
             if t.chars().next().unwrap().is_ascii_digit() {
                 if let Some(n) = parse_number(t) {
@@ -213,6 +211,8 @@ fn expression_word(input: &str) -> IResult<&str, Expression> {
         Word::U32(n) => Ok((input, Expression::U32(n))),
         Word::Str(s) => Ok((input, Expression::Str(s))),
         Word::Null => Ok((input, Expression::Null)),
+        Word::True => Ok((input, Expression::Bool(true))),
+        Word::False => Ok((input, Expression::Bool(false))),
         _ => Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
@@ -449,10 +449,9 @@ fn assign_suffix(input: &str) -> IResult<&str, AssignSuffix> {
     )).parse(input)
 }
 
-fn expr_or_assign_statement(input: &str) -> IResult<&str, Statement> {
+fn assign_statement(input: &str) -> IResult<&str, Statement> {
     let (input, expr) = expression(input)?;
     let (input, suffix) = opt(assign_suffix).parse(input)?;
-    let (input, _) = semicolon(input)?;
     Ok((input, suffix.map_or(Statement::Expr(expr.clone()), |s| s.apply(expr))))
 }
 
@@ -461,7 +460,6 @@ fn let_statement(input: &str) -> IResult<&str, Statement> {
     let (input, var) = class_row(input)?;
     let (input, _) = equals(input)?;
     let (input, expr) = expression(input)?;
-    let (input, _) = semicolon(input)?;
     Ok((input, Statement::Let(var, expr, false)))
 }
 
@@ -471,7 +469,6 @@ fn let_mut_statement(input: &str) -> IResult<&str, Statement> {
     let (input, var) = class_row(input)?;
     let (input, _) = equals(input)?;
     let (input, expr) = expression(input)?;
-    let (input, _) = semicolon(input)?;
     Ok((input, Statement::Let(var, expr, true)))
 }
 
@@ -498,33 +495,36 @@ fn expression_if(input: &str) -> IResult<&str, Expression> {
     ))
 }
 
-fn statement(input: &str) -> IResult<&str, Statement> {
+// fn statement(input: &str) -> IResult<&str, Statement> {
+//     alt((
+//         let_mut_statement,
+//         let_statement,
+//         for_statement,
+//         expr_or_assign_statement,
+//     ))
+//     .parse(input)
+// }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum BlockItem {
+    BlockStatement(Statement),
+    Statement(Statement),
+    BlockExpr(Expression),
+    Expr(Expression),
+    Semicolon,
+}
+
+fn block_item(input: &str) -> IResult<&str, BlockItem> {
     alt((
-        let_mut_statement,
-        let_statement,
-        for_statement,
-        expr_or_assign_statement,
+        map(for_statement, BlockItem::BlockStatement),
+        map(let_mut_statement, BlockItem::Statement),
+        map(let_statement, BlockItem::Statement),
+        map(assign_statement, BlockItem::Statement),
+        map(expression_if, BlockItem::BlockExpr),
+        map(expression, BlockItem::Expr),
+        map(semicolon, |_| BlockItem::Semicolon),
     ))
     .parse(input)
-}
-
-fn if_statement_no_semicolon(input: &str) -> IResult<&str, Statement> {
-    map(expression_if, Statement::Expr).parse(input)
-}
-
-fn ifs_then_statement(input: &str) -> IResult<&str, Vec<Statement>> {
-    let (input, mut ifs) = many0(if_statement_no_semicolon).parse(input)?;
-    let (input, stmt) = statement(input)?;
-
-    ifs.push(stmt);
-    Ok((input, ifs))
-}
-
-fn ifs_then_expr(input: &str) -> IResult<&str, (Vec<Statement>, Expression)> {
-    let (input, ifs) = many0(if_statement_no_semicolon).parse(input)?;
-    let (input, expr) = expression(input)?;
-
-    Ok((input, (ifs, expr)))
 }
 
 fn statement_block(input: &str) -> IResult<&str, Vec<Statement>> {
@@ -541,17 +541,46 @@ fn statement_block(input: &str) -> IResult<&str, Vec<Statement>> {
 
 fn expr_block(input: &str) -> IResult<&str, Expression> {
     let (input, _) = open_brace.parse(input)?;
-    let (input, stmts) = many0(ifs_then_statement).parse(input)?;
-    let (input, final_stuff) = opt(ifs_then_expr).parse(input)?;
-    let (input, _) = close_brace.parse(input)?;
-    let mut stmts = stmts.concat();
-    match final_stuff {
-        Some((ifs, expr)) => {
-            stmts.extend(ifs);
-            Ok((input, Expression::Block(stmts, Box::new(expr))))
+    let (input, items) = many0(block_item).parse(input)?;
+    let mut needs_semicolon = false;
+    let mut stmts = vec![];
+    for item in items {
+        if item == BlockItem::Semicolon {
+            needs_semicolon = false;
+        } else {
+            match item {
+                BlockItem::BlockStatement(stmt) => {
+                    stmts.push(stmt);
+                    needs_semicolon = false;
+                }
+                BlockItem::Statement(stmt) => {
+                    stmts.push(stmt);
+                    needs_semicolon = true;
+                }
+                BlockItem::BlockExpr(expr) => {
+                    stmts.push(Statement::Expr(expr));
+                    needs_semicolon = false;
+                }
+                BlockItem::Expr(expr) => {
+                    stmts.push(Statement::Expr(expr));
+                    needs_semicolon = true;
+                }
+                BlockItem::Semicolon => {
+                    unreachable!()
+                }
+            }
         }
-        None => Ok((input, Expression::Block(stmts, Box::new(Expression::Empty)))),
     }
+    let expr = if needs_semicolon {
+        match stmts.pop().expect("Stack shouldn't be empty at this point") {
+            Statement::Expr(expr) => expr,
+            _ => return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag))),
+        }
+    } else {
+        Expression::Empty
+    };
+    let (input, _) = close_brace.parse(input)?;
+    Ok((input, Expression::Block(stmts, Box::new(expr))))
 }
 
 fn function(input: &str) -> IResult<&str, Function> {
@@ -1104,16 +1133,9 @@ mod test {
     }
 
     #[test]
-    fn statement_expr() {
-        let input = "2;";
-        let result = all_consuming(statement).parse(input);
-        assert!(result.unwrap().1 == Statement::Expr(Expression::Integer(BigInt::from(2))));
-    }
-
-    #[test]
     fn statement_let() {
-        let input = "let x = 2;";
-        let result = all_consuming(statement).parse(input);
+        let input = "let x = 2";
+        let result = all_consuming(let_statement).parse(input);
         assert!(
             result.unwrap().1
                 == Statement::Let(
@@ -1126,8 +1148,8 @@ mod test {
 
     #[test]
     fn statement_let_mut() {
-        let input = "let mut x = 2;";
-        let result = all_consuming(statement).parse(input);
+        let input = "let mut x = 2";
+        let result = all_consuming(let_mut_statement).parse(input);
         assert!(
             result.unwrap().1
                 == Statement::Let(
@@ -1141,7 +1163,7 @@ mod test {
     #[test]
     fn statement_for() {
         let input = "for x : y { 2; }";
-        let result = all_consuming(statement).parse(input);
+        let result = all_consuming(for_statement).parse(input);
         assert!(
             result.unwrap().1
                 == Statement::For(
@@ -1450,8 +1472,8 @@ mod test {
 
     #[test]
     fn statement_assign() {
-        let input = "x = 5;";
-        let result = all_consuming(statement).parse(input);
+        let input = "x = 5";
+        let result = all_consuming(assign_statement).parse(input);
         assert!(
             result.unwrap().1
                 == Statement::Assign(
@@ -1491,6 +1513,26 @@ mod test {
                         )),
                     )
                 }
+        );
+    }
+
+    #[test]
+    fn expr_true() {
+        let input = "true";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Bool(true)
+        );
+    }
+
+    #[test]
+    fn expr_false() {
+        let input = "false";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Bool(false)
         );
     }
 }
