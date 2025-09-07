@@ -175,12 +175,8 @@ enum ExpressionSuffix {
 impl ExpressionSuffix {
     fn apply(self, base: Expression) -> Expression {
         match self {
-            ExpressionSuffix::Field(name) => {
-                Expression::MemberAccess(Box::new(base), name)
-            }
-            ExpressionSuffix::Build(fields) => {
-                Expression::Build(Box::new(base), fields)
-            }
+            ExpressionSuffix::Field(name) => Expression::MemberAccess(Box::new(base), name),
+            ExpressionSuffix::Build(fields) => Expression::Build(Box::new(base), fields),
         }
     }
 }
@@ -222,10 +218,13 @@ fn expression_base_inner(curly: bool) -> impl Fn(&str) -> IResult<&str, Expressi
 }
 
 fn expression_base(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
-    move |input| alt((
-        delimited(open_paren, expression_base_inner(true), close_paren),
-        expression_base_inner(curly)
-    )).parse(input)
+    move |input| {
+        alt((
+            delimited(open_paren, expression_base_inner(true), close_paren),
+            expression_base_inner(curly),
+        ))
+        .parse(input)
+    }
 }
 
 fn expression(input: &str) -> IResult<&str, Expression> {
@@ -252,20 +251,22 @@ fn class_row(input: &str) -> IResult<&str, Vec<Expression>> {
 }
 
 fn expression_table(input: &str) -> IResult<&str, Vec<Vec<Expression>>> {
-    map(delimited(open_brace, opt(terminated(separated_list1(comma, class_row), opt(comma))), close_brace), Option::unwrap_or_default).parse(input)
+    map(
+        delimited(
+            open_brace,
+            opt(terminated(separated_list1(comma, class_row), opt(comma))),
+            close_brace,
+        ),
+        Option::unwrap_or_default,
+    )
+    .parse(input)
 }
 
 fn class_table(input: &str) -> IResult<&str, ClassTable> {
     let (input, _) = specific_word(Word::Class).parse(input)?;
     let (input, header) = class_row(input)?;
     let (input, body) = expression_table(input)?;
-    Ok((
-        input,
-        ClassTable {
-            header,
-            body,
-        },
-    ))
+    Ok((input, ClassTable { header, body }))
 }
 
 fn expr_statement(input: &str) -> IResult<&str, Statement> {
@@ -445,46 +446,77 @@ mod test {
     fn expression_field() {
         let input = "my_token.my_field";
         let result = all_consuming(expression).parse(input);
-        assert!(result.unwrap().1 == Expression::MemberAccess(Box::new(Expression::Token("my_token".to_owned())), "my_field".to_owned()));
+        assert!(
+            result.unwrap().1
+                == Expression::MemberAccess(
+                    Box::new(Expression::Token("my_token".to_owned())),
+                    "my_field".to_owned()
+                )
+        );
     }
 
     #[test]
     fn expression_fields() {
         let input = "my_token.my_field.my_other_field";
         let result = all_consuming(expression).parse(input);
-        assert!(result.unwrap().1 == Expression::MemberAccess(
-            Box::new(Expression::MemberAccess(
-                Box::new(Expression::Token("my_token".to_owned())),
-                "my_field".to_owned()
-            )),
-            "my_other_field".to_owned()
-        ));
+        assert!(
+            result.unwrap().1
+                == Expression::MemberAccess(
+                    Box::new(Expression::MemberAccess(
+                        Box::new(Expression::Token("my_token".to_owned())),
+                        "my_field".to_owned()
+                    )),
+                    "my_other_field".to_owned()
+                )
+        );
     }
 
     #[test]
     fn expression_build_empty() {
         let input = "Foo {}";
         let result = all_consuming(expression).parse(input);
-        assert!(result.unwrap().1 == Expression::Build(Box::new(Expression::Token("Foo".to_owned())), vec![]));
+        assert!(
+            result.unwrap().1
+                == Expression::Build(Box::new(Expression::Token("Foo".to_owned())), vec![])
+        );
     }
 
     #[test]
     fn expression_build_1() {
         let input = "Foo { bar: 42 }";
         let result = all_consuming(expression).parse(input);
-        assert!(result.unwrap().1 == Expression::Build(Box::new(Expression::Token("Foo".to_owned())), vec![
-            vec![Expression::Token("bar".to_owned()), Expression::Integer(BigInt::from(42))],
-        ]));
+        assert!(
+            result.unwrap().1
+                == Expression::Build(
+                    Box::new(Expression::Token("Foo".to_owned())),
+                    vec![vec![
+                        Expression::Token("bar".to_owned()),
+                        Expression::Integer(BigInt::from(42))
+                    ],]
+                )
+        );
     }
 
     #[test]
     fn expression_build_2() {
         let input = "Foo { bar: 42, baz: 43 }";
         let result = all_consuming(expression).parse(input);
-        assert!(result.unwrap().1 == Expression::Build(Box::new(Expression::Token("Foo".to_owned())), vec![
-            vec![Expression::Token("bar".to_owned()), Expression::Integer(BigInt::from(42))],
-            vec![Expression::Token("baz".to_owned()), Expression::Integer(BigInt::from(43))],
-        ]));
+        assert!(
+            result.unwrap().1
+                == Expression::Build(
+                    Box::new(Expression::Token("Foo".to_owned())),
+                    vec![
+                        vec![
+                            Expression::Token("bar".to_owned()),
+                            Expression::Integer(BigInt::from(42))
+                        ],
+                        vec![
+                            Expression::Token("baz".to_owned()),
+                            Expression::Integer(BigInt::from(43))
+                        ],
+                    ]
+                )
+        );
     }
 
     #[test]
@@ -498,10 +530,22 @@ mod test {
     fn class_cell_build_paren() {
         let input = "(Foo { bar: 42, baz: 43 })";
         let result = all_consuming(class_cell).parse(input);
-        assert!(result.unwrap().1 == Expression::Build(Box::new(Expression::Token("Foo".to_owned())), vec![
-            vec![Expression::Token("bar".to_owned()), Expression::Integer(BigInt::from(42))],
-            vec![Expression::Token("baz".to_owned()), Expression::Integer(BigInt::from(43))],
-        ]));
+        assert!(
+            result.unwrap().1
+                == Expression::Build(
+                    Box::new(Expression::Token("Foo".to_owned())),
+                    vec![
+                        vec![
+                            Expression::Token("bar".to_owned()),
+                            Expression::Integer(BigInt::from(42))
+                        ],
+                        vec![
+                            Expression::Token("baz".to_owned()),
+                            Expression::Integer(BigInt::from(43))
+                        ],
+                    ]
+                )
+        );
     }
 
     #[test]
