@@ -5,7 +5,7 @@ use nom::{
     character::complete::multispace0,
     combinator::{all_consuming, map, not, opt, value},
     multi::{many0, separated_list0, separated_list1},
-    sequence::{delimited, preceded, terminated},
+    sequence::{delimited, pair, preceded, terminated},
 };
 use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
@@ -20,6 +20,7 @@ enum Word {
     Fn,
     Let,
     Mut,
+    For,
     Token(String),
     Integer(BigInt),
     U32(u32),
@@ -56,6 +57,14 @@ fn open_paren(input: &str) -> IResult<&str, ()> {
 
 fn close_paren(input: &str) -> IResult<&str, ()> {
     value((), terminated(tag(")"), multispace0)).parse(input)
+}
+
+fn open_square(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag("["), multispace0)).parse(input)
+}
+
+fn close_square(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag("]"), multispace0)).parse(input)
 }
 
 fn arrow(input: &str) -> IResult<&str, ()> {
@@ -112,6 +121,7 @@ fn unquoted_word(input: &str) -> IResult<&str, Word> {
         "fn" => Ok((input, Word::Fn)),
         "let" => Ok((input, Word::Let)),
         "mut" => Ok((input, Word::Mut)),
+        "for" => Ok((input, Word::For)),
         _ => {
             if t.chars().next().unwrap().is_ascii_digit() {
                 if let Some(n) = parse_number(t) {
@@ -166,13 +176,12 @@ fn specific_word(expected: Word) -> impl Fn(&str) -> IResult<&str, ()> {
 }
 
 fn expression_word(input: &str) -> IResult<&str, Expression> {
-    let (input, t) = opt(word).parse(input)?;
+    let (input, t) = word.parse(input)?;
     match t {
-        None => Ok((input, Expression::Empty)),
-        Some(Word::Token(x)) => Ok((input, Expression::Token(x))),
-        Some(Word::Integer(n)) => Ok((input, Expression::Integer(n))),
-        Some(Word::U32(n)) => Ok((input, Expression::U32(n))),
-        Some(Word::Str(s)) => Ok((input, Expression::Str(s))),
+        Word::Token(x) => Ok((input, Expression::Token(x))),
+        Word::Integer(n) => Ok((input, Expression::Integer(n))),
+        Word::U32(n) => Ok((input, Expression::U32(n))),
+        Word::Str(s) => Ok((input, Expression::Str(s))),
         _ => Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
@@ -183,6 +192,8 @@ fn expression_word(input: &str) -> IResult<&str, Expression> {
 enum ExpressionSuffix {
     Field(String),
     Build(Vec<Vec<Expression>>),
+    Subscript(Vec<Expression>),
+    Call(Vec<Expression>),
 }
 
 impl ExpressionSuffix {
@@ -190,6 +201,8 @@ impl ExpressionSuffix {
         match self {
             ExpressionSuffix::Field(name) => Expression::MemberAccess(Box::new(base), name),
             ExpressionSuffix::Build(fields) => Expression::Build(Box::new(base), fields),
+            ExpressionSuffix::Subscript(indices) => Expression::Subscript(Box::new(base), indices),
+            ExpressionSuffix::Call(args) => Expression::Call(Box::new(base), args),
         }
     }
 }
@@ -209,12 +222,34 @@ fn expression_build_suffix(input: &str) -> IResult<&str, ExpressionSuffix> {
     map(expression_table, ExpressionSuffix::Build).parse(input)
 }
 
+fn expression_subscript_suffix(input: &str) -> IResult<&str, ExpressionSuffix> {
+    let (input, indices) = delimited(
+        open_square,
+        separated_list0(comma, expression),
+        close_square,
+    )
+    .parse(input)?;
+    Ok((input, ExpressionSuffix::Subscript(indices)))
+}
+
+fn expression_call_suffix(input: &str) -> IResult<&str, ExpressionSuffix> {
+    let (input, args) =
+        delimited(open_paren, separated_list0(comma, expression), close_paren).parse(input)?;
+    Ok((input, ExpressionSuffix::Call(args)))
+}
+
 fn expression_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, ExpressionSuffix> {
     move |input| {
         if curly {
-            alt((expression_field_suffix, expression_build_suffix)).parse(input)
+            alt((
+                expression_field_suffix,
+                expression_subscript_suffix,
+                expression_call_suffix,
+                expression_build_suffix,
+            ))
+            .parse(input)
         } else {
-            alt((expression_field_suffix,)).parse(input)
+            alt((expression_field_suffix, expression_subscript_suffix)).parse(input)
         }
     }
 }
@@ -246,8 +281,8 @@ fn expression(input: &str) -> IResult<&str, Expression> {
 }
 
 fn class_cell(input: &str) -> IResult<&str, Expression> {
-    let (input, base) = expression_base(false)(input)?;
-    Ok((input, base))
+    let (input, base) = opt(expression_base(false)).parse(input)?;
+    Ok((input, base.unwrap_or(Expression::Empty)))
 }
 
 fn class_row(input: &str) -> IResult<&str, Vec<Expression>> {
@@ -304,8 +339,38 @@ fn let_mut_statement(input: &str) -> IResult<&str, Statement> {
     Ok((input, Statement::Let(var, expr, true)))
 }
 
+fn for_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = specific_word(Word::For).parse(input)?;
+    let (input, header) = class_row(input)?;
+    let (input, body) = statement_block(input)?;
+    Ok((input, Statement::For(header, body)))
+}
+
 fn statement(input: &str) -> IResult<&str, Statement> {
-    alt((let_mut_statement, let_statement, expr_statement)).parse(input)
+    alt((
+        let_mut_statement,
+        let_statement,
+        for_statement,
+        expr_statement,
+    ))
+    .parse(input)
+}
+
+fn statement_block(input: &str) -> IResult<&str, Vec<Statement>> {
+    let (input, statements) = delimited(
+        open_brace,
+        opt(pair(
+            separated_list1(semicolon, statement),
+            opt(value(Statement::Empty, semicolon)),
+        )),
+        close_brace,
+    )
+    .parse(input)?;
+    let result = match statements {
+        None => vec![Statement::Empty],
+        Some((s1, s2)) => s1.into_iter().chain(s2).collect(),
+    };
+    Ok((input, result))
 }
 
 fn function(input: &str) -> IResult<&str, Function> {
@@ -314,12 +379,7 @@ fn function(input: &str) -> IResult<&str, Function> {
     let (input, params) =
         delimited(open_paren, separated_list0(comma, class_row), close_paren).parse(input)?;
     let (input, ret) = preceded(arrow, class_row).parse(input)?;
-    let (input, body) = delimited(
-        open_brace,
-        separated_list1(semicolon, statement),
-        close_brace,
-    )
-    .parse(input)?;
+    let (input, body) = statement_block(input)?;
     Ok((
         input,
         Function {
@@ -550,6 +610,58 @@ mod test {
                             Expression::Token("baz".to_owned()),
                             Expression::Integer(BigInt::from(43))
                         ],
+                    ]
+                )
+        );
+    }
+
+    #[test]
+    fn expression_subscript() {
+        let input = "a[b]";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Subscript(
+                    Box::new(Expression::Token("a".to_owned())),
+                    vec![Expression::Token("b".to_owned())]
+                )
+        );
+    }
+
+    #[test]
+    fn expression_call_empty() {
+        let input = "a()";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Call(Box::new(Expression::Token("a".to_owned())), vec![])
+        );
+    }
+
+    #[test]
+    fn expression_call() {
+        let input = "a(b)";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Call(
+                    Box::new(Expression::Token("a".to_owned())),
+                    vec![Expression::Token("b".to_owned())]
+                )
+        );
+    }
+
+    #[test]
+    fn expression_call_2() {
+        let input = "a(b, c)";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Call(
+                    Box::new(Expression::Token("a".to_owned())),
+                    vec![
+                        Expression::Token("b".to_owned()),
+                        Expression::Token("c".to_owned())
                     ]
                 )
         );
@@ -793,6 +905,22 @@ mod test {
     }
 
     #[test]
+    fn statement_for() {
+        let input = "for x : y { 2 }";
+        let result = all_consuming(statement).parse(input);
+        assert!(
+            result.unwrap().1
+                == Statement::For(
+                    vec![
+                        Expression::Token("x".to_owned()),
+                        Expression::Token("y".to_owned())
+                    ],
+                    vec![Statement::Expr(Expression::Integer(BigInt::from(2)))],
+                )
+        );
+    }
+
+    #[test]
     fn fn_expr() {
         let input = "fn my_function() -> u32 { 2 }";
         let result = all_consuming(function).parse(input);
@@ -803,6 +931,39 @@ mod test {
                     params: vec![],
                     ret: vec![Expression::Token("u32".to_owned()),],
                     body: vec![Statement::Expr(Expression::Integer(BigInt::from(2)))],
+                }
+        );
+    }
+
+    #[test]
+    fn fn_expr_semicolon() {
+        let input = "fn my_function() -> u32 { 2; }";
+        let result = all_consuming(function).parse(input);
+        assert!(
+            result.unwrap().1
+                == Function {
+                    header: vec![Expression::Token("my_function".to_owned()),],
+                    params: vec![],
+                    ret: vec![Expression::Token("u32".to_owned()),],
+                    body: vec![
+                        Statement::Expr(Expression::Integer(BigInt::from(2))),
+                        Statement::Empty
+                    ],
+                }
+        );
+    }
+
+    #[test]
+    fn fn_empty() {
+        let input = "fn my_function() -> u32 { }";
+        let result = all_consuming(function).parse(input);
+        assert!(
+            result.unwrap().1
+                == Function {
+                    header: vec![Expression::Token("my_function".to_owned()),],
+                    params: vec![],
+                    ret: vec![Expression::Token("u32".to_owned()),],
+                    body: vec![Statement::Empty],
                 }
         );
     }

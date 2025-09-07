@@ -60,7 +60,7 @@ impl Env {
             .clone();
         function.check_args(args);
         for (arg, param) in args.iter().zip(&function.params) {
-            let name = self.typed_to_name(&param);
+            let name = self.typed_to_name(param);
             self.create_var(name, arg.clone(), false);
         }
 
@@ -93,6 +93,7 @@ impl Env {
 
     fn eval_stmt(&mut self, stmt: &Statement) -> Value {
         match stmt {
+            Statement::Empty => Value::Unit,
             Statement::Expr(expr) => self.eval_expr(expr),
             Statement::Let(var, expr, mutable) => {
                 let value = self.eval_expr(expr);
@@ -103,6 +104,9 @@ impl Env {
                     }
                     _ => panic!("Unsupported variable in let statement"),
                 }
+            }
+            Statement::For(header, body) => {
+                unimplemented!()
             }
         }
     }
@@ -136,6 +140,7 @@ impl Env {
                 }
                 Value::Struct(class_name, field_values)
             }
+            _ => unimplemented!("Expression type not supported"),
         }
     }
 
@@ -148,8 +153,8 @@ impl Env {
 
     fn typed_to_name(&self, expr: &[Expression]) -> String {
         match expr {
-            [Expression::Token(s),_] => s.clone(),
-            _ => panic!("Expected typed token")
+            [Expression::Token(s), _] => s.clone(),
+            _ => panic!("Expected typed token"),
         }
     }
 

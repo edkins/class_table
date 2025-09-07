@@ -8,6 +8,8 @@ pub enum Expression {
     U32(u32),
     Str(String),
     MemberAccess(Box<Expression>, String),
+    Subscript(Box<Expression>, Vec<Expression>),
+    Call(Box<Expression>, Vec<Expression>),
     Build(Box<Expression>, Vec<Vec<Expression>>),
 }
 
@@ -19,8 +21,10 @@ pub struct ClassTable {
 
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub enum Statement {
+    Empty,
     Expr(Expression),
     Let(Vec<Expression>, Expression, bool),
+    For(Vec<Expression>, Vec<Statement>),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]

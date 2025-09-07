@@ -2,7 +2,10 @@ use std::fs;
 
 use clap::Parser;
 
-use crate::interpreter::{env::{Env,Value}, parse};
+use crate::interpreter::{
+    env::{Env, Value},
+    parse,
+};
 
 mod interpreter;
 
