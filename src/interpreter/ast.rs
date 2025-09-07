@@ -3,6 +3,7 @@ use num_bigint::BigInt;
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub enum Expression {
     Empty,
+    Null,
     Token(String),
     Integer(BigInt),
     U32(u32),
@@ -22,9 +23,9 @@ pub struct ClassTable {
 
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub enum Statement {
-    Empty,
     Expr(Expression),
     Let(Vec<Expression>, Expression, bool),
+    Assign(String, Expression, Expression),
     For(Vec<Expression>, Vec<Statement>),
     If(Expression, Vec<Statement>, Vec<Statement>),
 }

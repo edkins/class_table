@@ -23,6 +23,7 @@ enum Word {
     For,
     If,
     Else,
+    Null,
     Token(String),
     Integer(BigInt),
     U32(u32),
@@ -146,6 +147,7 @@ fn unquoted_word(input: &str) -> IResult<&str, Word> {
         "for" => Ok((input, Word::For)),
         "if" => Ok((input, Word::If)),
         "else" => Ok((input, Word::Else)),
+        "null" => Ok((input, Word::Null)),
         _ => {
             if t.chars().next().unwrap().is_ascii_digit() {
                 if let Some(n) = parse_number(t) {
@@ -206,6 +208,7 @@ fn expression_word(input: &str) -> IResult<&str, Expression> {
         Word::Integer(n) => Ok((input, Expression::Integer(n))),
         Word::U32(n) => Ok((input, Expression::U32(n))),
         Word::Str(s) => Ok((input, Expression::Str(s))),
+        Word::Null => Ok((input, Expression::Null)),
         _ => Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
@@ -406,8 +409,32 @@ fn class_table(input: &str) -> IResult<&str, ClassTable> {
     Ok((input, ClassTable { header, body }))
 }
 
-fn expr_statement(input: &str) -> IResult<&str, Statement> {
-    map(terminated(expression, semicolon), Statement::Expr).parse(input)
+struct AssignSuffix {
+    pub op: String,
+    pub value: Expression,
+}
+
+impl AssignSuffix {
+    pub fn apply(self, expr: Expression) -> Statement {
+        Statement::Assign(self.op, expr, self.value)
+    }
+
+    pub fn mapper(op: &str) -> impl Fn(Expression) -> AssignSuffix {
+        move |value| AssignSuffix { op: op.to_owned(), value }
+    }
+}
+
+fn assign_suffix(input: &str) -> IResult<&str, AssignSuffix> {
+    alt((
+        map(preceded(equals, expression), AssignSuffix::mapper("=")),
+    )).parse(input)
+}
+
+fn expr_or_assign_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, expr) = expression(input)?;
+    let (input, suffix) = opt(assign_suffix).parse(input)?;
+    let (input, _) = semicolon(input)?;
+    Ok((input, suffix.map_or(Statement::Expr(expr.clone()), |s| s.apply(expr))))
 }
 
 fn let_statement(input: &str) -> IResult<&str, Statement> {
@@ -454,7 +481,7 @@ fn statement(input: &str) -> IResult<&str, Statement> {
         let_statement,
         for_statement,
         if_statement,
-        expr_statement,
+        expr_or_assign_statement,
     ))
     .parse(input)
 }
@@ -1185,6 +1212,146 @@ mod test {
                         Expression::Token("y".to_owned())
                     ]
                 )
+        );
+    }
+
+    #[test]
+    fn expr_noteq() {
+        let input = "x != y";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Call(
+                    Box::new(Expression::Token("!=".to_owned())),
+                    vec![
+                        Expression::Token("x".to_owned()),
+                        Expression::Token("y".to_owned())
+                    ]
+                )
+        );
+    }
+
+    #[test]
+    fn expr_lt() {
+        let input = "x < y";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Call(
+                    Box::new(Expression::Token("<".to_owned())),
+                    vec![
+                        Expression::Token("x".to_owned()),
+                        Expression::Token("y".to_owned())
+                    ]
+                )
+        );
+    }
+
+    #[test]
+    fn expr_or() {
+        let input = "x || y";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Call(
+                    Box::new(Expression::Token("||".to_owned())),
+                    vec![
+                        Expression::Token("x".to_owned()),
+                        Expression::Token("y".to_owned())
+                    ]
+                )
+        );
+    }
+
+    #[test]
+    fn expr_and() {
+        let input = "x && y";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Call(
+                    Box::new(Expression::Token("&&".to_owned())),
+                    vec![
+                        Expression::Token("x".to_owned()),
+                        Expression::Token("y".to_owned())
+                    ]
+                )
+        );
+    }
+
+    #[test]
+    fn expr_precedence() {
+        let input = "a < b && c == d || e == f && g != h";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Call(
+                    Box::new(Expression::Token("||".to_owned())),
+                    vec![
+                        Expression::Call(
+                            Box::new(Expression::Token("&&".to_owned())),
+                            vec![
+                                Expression::Call(
+                                    Box::new(Expression::Token("<".to_owned())),
+                                    vec![
+                                        Expression::Token("a".to_owned()),
+                                        Expression::Token("b".to_owned())
+                                    ]
+                                ),
+                                Expression::Call(
+                                    Box::new(Expression::Token("==".to_owned())),
+                                    vec![
+                                        Expression::Token("c".to_owned()),
+                                        Expression::Token("d".to_owned())
+                                    ]
+                                )
+                            ]
+                        ),
+                        Expression::Call(
+                            Box::new(Expression::Token("&&".to_owned())),
+                            vec![
+                                Expression::Call(
+                                    Box::new(Expression::Token("==".to_owned())),
+                                    vec![
+                                        Expression::Token("e".to_owned()),
+                                        Expression::Token("f".to_owned())
+                                    ]
+                                ),
+                                Expression::Call(
+                                    Box::new(Expression::Token("!=".to_owned())),
+                                    vec![
+                                        Expression::Token("g".to_owned()),
+                                        Expression::Token("h".to_owned())
+                                    ]
+                                )
+                            ]
+                        )
+                    ]
+                )
+        );
+    }
+
+    #[test]
+    fn statement_assign() {
+        let input = "x = 5;";
+        let result = all_consuming(statement).parse(input);
+        assert!(
+            result.unwrap().1
+                == Statement::Assign(
+                    "=".to_owned(),
+                    Expression::Token("x".to_owned()),
+                    Expression::Integer(BigInt::from(5))
+                )
+        );
+    }
+
+    #[test]
+    fn expr_null() {
+        let input = "null";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Null
         );
     }
 }

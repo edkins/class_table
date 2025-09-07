@@ -33,5 +33,6 @@ class 'class' : keyword {}
 
 fn main(input: str) -> str {
     let mut result = "";
+    let s = parse_keywords(input);
     result
 }

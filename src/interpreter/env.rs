@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, mem};
 
 use num_bigint::BigInt;
 
@@ -9,6 +9,7 @@ use crate::interpreter::ast::{
 pub struct Env {
     program: ProgramFile,
     vars: HashMap<String, VarValue>,
+    stack: Vec<HashMap<String, VarValue>>,
 }
 
 struct VarValue {
@@ -18,11 +19,13 @@ struct VarValue {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value {
-    Unit,
+    Null,
     Number(BigInt),
     U32(u32),
     Str(String),
     Struct(String, Vec<Value>),
+    List(Vec<Value>),
+    Class(String),
 }
 
 impl ProgramFile {
@@ -49,6 +52,7 @@ impl Env {
         Env {
             program,
             vars: HashMap::new(),
+            stack: Vec::new(),
         }
     }
 
@@ -70,11 +74,26 @@ impl Env {
     }
 
     fn create_var(&mut self, name: String, value: Value, mutable: bool) {
+        if self.vars.contains_key(&name) {
+            panic!("Variable {} already exists", name);
+        }
         self.vars.insert(name, VarValue { value, mutable });
     }
 
-    fn lookup_var(&self, name: &str) -> Option<&Value> {
-        self.vars.get(name).map(|var| &var.value)
+    fn lookup_var_or_global(&self, name: &str) -> Option<Value> {
+        let local = self.vars.get(name).map(|var| &var.value);
+        if local.is_some() {
+            return local.cloned();
+        }
+        self.lookup_class(name).map(|_| Value::Class(name.to_owned()))
+    }
+
+    fn remove_var(&mut self, name: &str) {
+        if self.vars.contains_key(name) {
+            self.vars.remove(name);
+        } else {
+            panic!("Variable {} not found", name);
+        }
     }
 
     fn lookup_class(&self, name: &str) -> Option<&ClassTable> {
@@ -88,32 +107,61 @@ impl Env {
             })
     }
 
-    fn eval_stmt(&mut self, stmt: &Statement) -> Value {
+    fn eval_stmt(&mut self, stmt: &Statement) {
         match stmt {
-            Statement::Empty => Value::Unit,
-            Statement::Expr(expr) => self.eval_expr(expr),
+            Statement::Expr(expr) => {
+                self.eval_expr(expr);
+            }
             Statement::Let(var, expr, mutable) => {
                 let value = self.eval_expr(expr);
                 match var.as_slice() {
                     &[Expression::Token(ref x)] => {
                         self.create_var(x.clone(), value, *mutable);
-                        Value::Unit
                     }
                     _ => panic!("Unsupported variable in let statement"),
                 }
             }
+            Statement::Assign(kind, lhs, rhs) => {
+                let name = self.to_name(lhs);
+                let value = self.eval_expr(rhs);
+                match kind as &str {
+                    "=" => {
+                        let var = self.vars.get_mut(&name).expect("Variable not found");
+                        if !var.mutable {
+                            panic!("Cannot assign to immutable variable");
+                        }
+                        var.value = value;
+                    }
+                    _ => panic!("Unsupported assignment operator"),
+                }
+            }
+            Statement::For(header, body) => {
+                assert!(header.len() == 2);
+                let name = self.to_name(&header[0]);
+                let iterable = self.eval_expr(&header[1]);
+                if let Value::List(items) = iterable {
+                    for item in items {
+                        self.create_var(name.clone(), item, false);
+                        for stmt in body {
+                            self.eval_stmt(stmt);
+                        }
+                        self.remove_var(&name);
+                    }
+                } else {
+                    panic!("For loop expects a list");
+                }
+            }
             _ => {
-                unimplemented!()
+                unimplemented!("{:?}", stmt)
             }
         }
     }
 
     fn eval_expr(&mut self, expr: &Expression) -> Value {
         match expr {
-            Expression::Empty => Value::Unit,
+            Expression::Empty | Expression::Null => Value::Null,
             Expression::Token(s) => self
-                .lookup_var(s)
-                .cloned()
+                .lookup_var_or_global(s)
                 .unwrap_or_else(|| panic!("Variable {} not found", s)),
             Expression::Integer(n) => Value::Number(n.clone()),
             Expression::U32(n) => Value::U32(*n),
@@ -124,7 +172,7 @@ impl Env {
             }
             Expression::Build(cl, fields) => {
                 let class_name = self.to_name(cl);
-                let mut field_values = vec![Value::Unit; self.get_class_field_count(&class_name)];
+                let mut field_values = vec![Value::Null; self.get_class_field_count(&class_name)];
                 for field in fields {
                     match field.as_slice() {
                         &[Expression::Token(ref name), ref expr] => {
@@ -142,6 +190,16 @@ impl Env {
                     self.eval_stmt(stmt);
                 }
                 self.eval_expr(expr)
+            }
+            Expression::Call(f, args) => {
+                let func = self.to_name(f);
+                let arg_values = args.iter().map(|arg| self.eval_expr(arg)).collect::<Vec<_>>();
+                let mut vars = HashMap::new();
+                mem::swap(&mut self.vars, &mut vars);
+                self.stack.push(vars);
+                let result = self.run(&func, &arg_values);
+                self.vars = self.stack.pop().expect("Stack underflow");
+                result
             }
             _ => unimplemented!("Expression type not supported"),
         }
@@ -182,7 +240,31 @@ impl Env {
                 let field_index = self.get_class_field_index(&class_name, field);
                 fields[field_index].clone()
             }
-            _ => panic!("Not a struct"),
+            Value::Class(class_name) => {
+                match field {
+                    "classes" => Value::List(self.list_classes(&class_name)),
+                    _ => panic!("Unknown class field {} for class {}", field, class_name),
+                }
+            }
+            _ => panic!("Not a struct or class: {:?}", structure),
         }
+    }
+
+    fn list_classes(&self, metaclass: &str) -> Vec<Value> {
+        let search_value = Expression::Token(metaclass.to_owned());
+        self.program
+            .declarations
+            .iter()
+            .filter_map(|decl| match decl {
+                Declaration::Class(class) if class.header.len() >= 2 && class.header[1] == search_value => {
+                    if let Expression::Token(ref name) = class.header[0] {
+                        Some(Value::Class(name.clone()))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
