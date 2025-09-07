@@ -100,7 +100,11 @@ fn noteq(input: &str) -> IResult<&str, ()> {
 }
 
 fn lt(input: &str) -> IResult<&str, ()> {
-    value((), terminated(terminated(tag("<"), not(tag("<="))), multispace0)).parse(input)
+    value((), terminated(terminated(tag("<"), not(tag("="))), multispace0)).parse(input)
+}
+
+fn gt(input: &str) -> IResult<&str, ()> {
+    value((), terminated(terminated(tag(">"), not(tag("="))), multispace0)).parse(input)
 }
 
 enum Precision {
@@ -289,7 +293,7 @@ fn term_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, ExpressionSuffix> 
     }
 }
 
-fn expression_term(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
+fn expression_suffixed(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
     move |input| {
         let (input, mut base) = expression_tight(input)?;
         let (input, suffixes) = many0(term_suffix(curly)).parse(input)?;
@@ -297,6 +301,16 @@ fn expression_term(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
             base = suffix.apply(base);
         }
         Ok((input, base))
+    }
+}
+
+fn expression_term(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
+    move |input| {
+        if curly {
+            alt((expression_if, expression_suffixed(curly))).parse(input)
+        } else {
+            expression_suffixed(curly).parse(input)
+        }
     }
 }
 
@@ -324,6 +338,7 @@ fn rel_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, BinopSuffix> {
         map(preceded(eqeq, expression_term(curly)), BinopSuffix::mapper("==")),
         map(preceded(noteq, expression_term(curly)), BinopSuffix::mapper("!=")),
         map(preceded(lt, expression_term(curly)), BinopSuffix::mapper("<")),
+        map(preceded(gt, expression_term(curly)), BinopSuffix::mapper(">")),
     )).parse(input)
 }
 
@@ -467,15 +482,19 @@ fn for_statement(input: &str) -> IResult<&str, Statement> {
     Ok((input, Statement::For(header, body)))
 }
 
-fn if_statement(input: &str) -> IResult<&str, Statement> {
+fn expression_if(input: &str) -> IResult<&str, Expression> {
     let (input, _) = specific_word(Word::If).parse(input)?;
     let (input, cond) = class_cell(input)?;
-    let (input, then_branch) = statement_block(input)?;
+    let (input, then_branch) = expr_block(input)?;
     let (input, else_branch) =
-        opt(preceded(specific_word(Word::Else), statement_block)).parse(input)?;
+        opt(preceded(specific_word(Word::Else), alt((expr_block, expression_if)))).parse(input)?;
     Ok((
         input,
-        Statement::If(cond, then_branch, else_branch.unwrap_or_default()),
+        Expression::If(
+            Box::new(cond),
+            Box::new(then_branch),
+            Box::new(else_branch.unwrap_or(Expression::Empty)),
+        ),
     ))
 }
 
@@ -484,7 +503,7 @@ fn statement(input: &str) -> IResult<&str, Statement> {
         let_mut_statement,
         let_statement,
         for_statement,
-        if_statement,
+        map(expression_if, |if_expr| Statement::Expr(if_expr)),  // allow if expressions not followed by semicolon
         expr_or_assign_statement,
     ))
     .parse(input)
@@ -1106,30 +1125,62 @@ mod test {
     }
 
     #[test]
-    fn statement_if() {
-        let input = "if x { 2; }";
-        let result = all_consuming(statement).parse(input);
+    fn expr_if() {
+        let input = "if x { 2 }";
+        let result = all_consuming(expression).parse(input);
         assert!(
             result.unwrap().1
-                == Statement::If(
-                    Expression::Token("x".to_owned()),
-                    vec![Statement::Expr(Expression::Integer(BigInt::from(2)))],
-                    vec![],
+                == Expression::If(
+                    Box::new(Expression::Token("x".to_owned())),
+                    Box::new(Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(2))))),
+                    Box::new(Expression::Empty),
                 )
         );
     }
 
     #[test]
-    fn statement_if_else() {
+    fn expr_if_else() {
+        let input = "if x { 2 } else { 3 }";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::If(
+                    Box::new(Expression::Token("x".to_owned())),
+                    Box::new(Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(2))))),
+                    Box::new(Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(3))))),
+                )
+        );
+    }
+
+    #[test]
+    fn expr_else_if() {
+        let input = "if x { 2 } else if y { 3 } else { 4 }";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::If(
+                    Box::new(Expression::Token("x".to_owned())),
+                    Box::new(Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(2))))),
+                    Box::new(Expression::If(
+                        Box::new(Expression::Token("y".to_owned())),
+                        Box::new(Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(3))))),
+                        Box::new(Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(4))))),
+                    )),
+                )
+        );
+    }
+
+    #[test]
+    fn expr_statement_if_else() {
         let input = "if x { 2; } else { 3; }";
         let result = all_consuming(statement).parse(input);
         assert!(
             result.unwrap().1
-                == Statement::If(
-                    Expression::Token("x".to_owned()),
-                    vec![Statement::Expr(Expression::Integer(BigInt::from(2)))],
-                    vec![Statement::Expr(Expression::Integer(BigInt::from(3)))],
-                )
+                == Statement::Expr(Expression::If(
+                    Box::new(Expression::Token("x".to_owned())),
+                    Box::new(Expression::Block(vec![Statement::Expr(Expression::Integer(BigInt::from(2)))], Box::new(Expression::Empty))),
+                    Box::new(Expression::Block(vec![Statement::Expr(Expression::Integer(BigInt::from(3)))], Box::new(Expression::Empty))),
+                ))
         );
     }
 
@@ -1245,6 +1296,22 @@ mod test {
             result.unwrap().1
                 == Expression::Call(
                     Box::new(Expression::Token("<".to_owned())),
+                    vec![
+                        Expression::Token("x".to_owned()),
+                        Expression::Token("y".to_owned())
+                    ]
+                )
+        );
+    }
+
+    #[test]
+    fn expr_gt() {
+        let input = "x > y";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Call(
+                    Box::new(Expression::Token(">".to_owned())),
                     vec![
                         Expression::Token("x".to_owned()),
                         Expression::Token("y".to_owned())

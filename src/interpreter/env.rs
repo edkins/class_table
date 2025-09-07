@@ -228,24 +228,6 @@ impl Env {
                     panic!("For loop expects a list");
                 }
             }
-            Statement::If(cond, then_body, else_body) => {
-                let condition = self.eval_expr(cond);
-                match condition {
-                    Value::Bool(true) => {
-                        for stmt in then_body {
-                            self.eval_stmt(stmt);
-                        }
-                    }
-                    Value::Bool(false) => {
-                        for stmt in else_body {
-                            self.eval_stmt(stmt);
-                        }
-                    }
-                    _ => {
-                        unimplemented!("{:?}", stmt)
-                    }
-                }
-            }
         }
     }
 
@@ -308,6 +290,20 @@ impl Env {
                 let result = self.run(&func, &arg_values);
                 self.vars = self.stack.pop().expect("Stack underflow");
                 result
+            }
+            Expression::If(cond, then_body, else_body) => {
+                let condition = self.eval_expr(cond);
+                match condition {
+                    Value::Bool(true) => {
+                        self.eval_expr(then_body)
+                    }
+                    Value::Bool(false) => {
+                        self.eval_expr(else_body)
+                    }
+                    _ => {
+                        unimplemented!("If condition not true or false: {:?}", condition)
+                    }
+                }
             }
             _ => unimplemented!("Expression type not supported"),
         }

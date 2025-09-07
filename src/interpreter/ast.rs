@@ -15,6 +15,7 @@ pub enum Expression {
     Or(Box<Expression>, Box<Expression>),
     Build(Box<Expression>, Vec<Vec<Expression>>),
     Block(Vec<Statement>, Box<Expression>),
+    If(Box<Expression>, Box<Expression>, Box<Expression>),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
@@ -29,7 +30,6 @@ pub enum Statement {
     Let(Vec<Expression>, Expression, bool),
     Assign(String, Expression, Expression),
     For(Vec<Expression>, Vec<Statement>),
-    If(Expression, Vec<Statement>, Vec<Statement>),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]

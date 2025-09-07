@@ -1,5 +1,6 @@
 class split_str {
     head : str,
+    specificity : u32,
     tail : str,
 }
 
@@ -14,10 +15,21 @@ fn parse_keyword(k : keyword, input: str) -> optional[split_str] {
     if startswith(input, k.name) {
         result = split_str {
             head: k.name,
+            specificity: 1,
             tail: "foo",
         };
     }
     result
+}
+
+fn better(x: split_str, y: split_str) -> bool {
+    if len(x.tail) < len(y.tail) {
+        true
+    } else if len(x.tail) > len(y.tail) {
+        false
+    } else {
+        x.specificity > y.specificity
+    }
 }
 
 fn parse_keywords(input: str) -> optional[split_str] {
@@ -25,7 +37,7 @@ fn parse_keywords(input: str) -> optional[split_str] {
     for k : keyword.classes {
         let suggestion = parse_keyword(k, input);
         if suggestion != null {
-            if best == null || len(suggestion.tail) < len(best.tail) {
+            if best == null || better(suggestion, best) {
                 best = suggestion;
             }
         }
