@@ -21,6 +21,8 @@ enum Word {
     Let,
     Mut,
     For,
+    If,
+    Else,
     Token(String),
     Integer(BigInt),
     U32(u32),
@@ -122,6 +124,8 @@ fn unquoted_word(input: &str) -> IResult<&str, Word> {
         "let" => Ok((input, Word::Let)),
         "mut" => Ok((input, Word::Mut)),
         "for" => Ok((input, Word::For)),
+        "if" => Ok((input, Word::If)),
+        "else" => Ok((input, Word::Else)),
         _ => {
             if t.chars().next().unwrap().is_ascii_digit() {
                 if let Some(n) = parse_number(t) {
@@ -269,6 +273,7 @@ fn expression_base(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
     move |input| {
         alt((
             delimited(open_paren, expression_base_inner(true), close_paren),
+            expr_block,
             expression_base_inner(curly),
         ))
         .parse(input)
@@ -318,8 +323,7 @@ fn class_table(input: &str) -> IResult<&str, ClassTable> {
 }
 
 fn expr_statement(input: &str) -> IResult<&str, Statement> {
-    let (input, expr) = expression(input)?;
-    Ok((input, Statement::Expr(expr)))
+    map(terminated(expression, semicolon), Statement::Expr).parse(input)
 }
 
 fn let_statement(input: &str) -> IResult<&str, Statement> {
@@ -327,6 +331,7 @@ fn let_statement(input: &str) -> IResult<&str, Statement> {
     let (input, var) = class_row(input)?;
     let (input, _) = equals(input)?;
     let (input, expr) = expression(input)?;
+    let (input, _) = semicolon(input)?;
     Ok((input, Statement::Let(var, expr, false)))
 }
 
@@ -336,6 +341,7 @@ fn let_mut_statement(input: &str) -> IResult<&str, Statement> {
     let (input, var) = class_row(input)?;
     let (input, _) = equals(input)?;
     let (input, expr) = expression(input)?;
+    let (input, _) = semicolon(input)?;
     Ok((input, Statement::Let(var, expr, true)))
 }
 
@@ -346,31 +352,39 @@ fn for_statement(input: &str) -> IResult<&str, Statement> {
     Ok((input, Statement::For(header, body)))
 }
 
+fn if_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = specific_word(Word::If).parse(input)?;
+    let (input, cond) = class_cell(input)?;
+    let (input, then_branch) = statement_block(input)?;
+    let (input, else_branch) =
+        opt(preceded(specific_word(Word::Else), statement_block)).parse(input)?;
+    Ok((
+        input,
+        Statement::If(cond, then_branch, else_branch.unwrap_or_default()),
+    ))
+}
+
 fn statement(input: &str) -> IResult<&str, Statement> {
     alt((
         let_mut_statement,
         let_statement,
         for_statement,
+        if_statement,
         expr_statement,
     ))
     .parse(input)
 }
 
 fn statement_block(input: &str) -> IResult<&str, Vec<Statement>> {
-    let (input, statements) = delimited(
-        open_brace,
-        opt(pair(
-            separated_list1(semicolon, statement),
-            opt(value(Statement::Empty, semicolon)),
-        )),
-        close_brace,
-    )
-    .parse(input)?;
-    let result = match statements {
-        None => vec![Statement::Empty],
-        Some((s1, s2)) => s1.into_iter().chain(s2).collect(),
-    };
-    Ok((input, result))
+    delimited(open_brace, many0(statement), close_brace).parse(input)
+}
+
+fn expr_block(input: &str) -> IResult<&str, Expression> {
+    let (input, _) = open_brace.parse(input)?;
+    let (input, stmts) = many0(statement).parse(input)?;
+    let (input, expr) = opt(expression).parse(input)?;
+    let (input, _) = close_brace.parse(input)?;
+    Ok((input, Expression::Block(stmts, Box::new(expr.unwrap_or(Expression::Empty)))))
 }
 
 fn function(input: &str) -> IResult<&str, Function> {
@@ -379,7 +393,7 @@ fn function(input: &str) -> IResult<&str, Function> {
     let (input, params) =
         delimited(open_paren, separated_list0(comma, class_row), close_paren).parse(input)?;
     let (input, ret) = preceded(arrow, class_row).parse(input)?;
-    let (input, body) = statement_block(input)?;
+    let (input, body) = expr_block(input)?;
     Ok((
         input,
         Function {
@@ -668,6 +682,57 @@ mod test {
     }
 
     #[test]
+    fn expression_block_empty() {
+        let input = "{}";
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Block(vec![], Box::new(Expression::Empty)));
+    }
+
+    #[test]
+    fn expression_block_expression() {
+        let input = "{ 42 }";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(42))))
+        );
+    }
+
+    #[test]
+    fn expression_block_statement() {
+        let input = "{ let x = 42; }";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Block(
+                    vec![Statement::Let(
+                        vec![Expression::Token("x".to_owned())],
+                        Expression::Integer(BigInt::from(42)),
+                        false
+                    )],
+                    Box::new(Expression::Empty)
+                )
+        );
+    }
+
+    #[test]
+    fn expression_block_statement_expression() {
+        let input = "{ let x = 42; x }";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Block(
+                    vec![Statement::Let(
+                        vec![Expression::Token("x".to_owned())],
+                        Expression::Integer(BigInt::from(42)),
+                        false
+                    )],
+                    Box::new(Expression::Token("x".to_owned())),
+                )
+        );
+    }
+
+    #[test]
     fn class_cell_build_error() {
         let input = "Foo { bar: 42, baz: 43 }";
         let result = all_consuming(class_cell).parse(input);
@@ -871,14 +936,14 @@ mod test {
 
     #[test]
     fn statement_expr() {
-        let input = "2";
+        let input = "2;";
         let result = all_consuming(statement).parse(input);
         assert!(result.unwrap().1 == Statement::Expr(Expression::Integer(BigInt::from(2))));
     }
 
     #[test]
     fn statement_let() {
-        let input = "let x = 2";
+        let input = "let x = 2;";
         let result = all_consuming(statement).parse(input);
         assert!(
             result.unwrap().1
@@ -892,7 +957,7 @@ mod test {
 
     #[test]
     fn statement_let_mut() {
-        let input = "let mut x = 2";
+        let input = "let mut x = 2;";
         let result = all_consuming(statement).parse(input);
         assert!(
             result.unwrap().1
@@ -906,7 +971,7 @@ mod test {
 
     #[test]
     fn statement_for() {
-        let input = "for x : y { 2 }";
+        let input = "for x : y { 2; }";
         let result = all_consuming(statement).parse(input);
         assert!(
             result.unwrap().1
@@ -921,6 +986,34 @@ mod test {
     }
 
     #[test]
+    fn statement_if() {
+        let input = "if x { 2; }";
+        let result = all_consuming(statement).parse(input);
+        assert!(
+            result.unwrap().1
+                == Statement::If(
+                    Expression::Token("x".to_owned()),
+                    vec![Statement::Expr(Expression::Integer(BigInt::from(2)))],
+                    vec![],
+                )
+        );
+    }
+
+    #[test]
+    fn statement_if_else() {
+        let input = "if x { 2; } else { 3; }";
+        let result = all_consuming(statement).parse(input);
+        assert!(
+            result.unwrap().1
+                == Statement::If(
+                    Expression::Token("x".to_owned()),
+                    vec![Statement::Expr(Expression::Integer(BigInt::from(2)))],
+                    vec![Statement::Expr(Expression::Integer(BigInt::from(3)))],
+                )
+        );
+    }
+
+    #[test]
     fn fn_expr() {
         let input = "fn my_function() -> u32 { 2 }";
         let result = all_consuming(function).parse(input);
@@ -930,7 +1023,7 @@ mod test {
                     header: vec![Expression::Token("my_function".to_owned()),],
                     params: vec![],
                     ret: vec![Expression::Token("u32".to_owned()),],
-                    body: vec![Statement::Expr(Expression::Integer(BigInt::from(2)))],
+                    body: Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(2))))
                 }
         );
     }
@@ -945,10 +1038,10 @@ mod test {
                     header: vec![Expression::Token("my_function".to_owned()),],
                     params: vec![],
                     ret: vec![Expression::Token("u32".to_owned()),],
-                    body: vec![
-                        Statement::Expr(Expression::Integer(BigInt::from(2))),
-                        Statement::Empty
-                    ],
+                    body: Expression::Block(
+                        vec![Statement::Expr(Expression::Integer(BigInt::from(2))),],
+                        Box::new(Expression::Empty)
+                    ),
                 }
         );
     }
@@ -963,7 +1056,7 @@ mod test {
                     header: vec![Expression::Token("my_function".to_owned()),],
                     params: vec![],
                     ret: vec![Expression::Token("u32".to_owned()),],
-                    body: vec![Statement::Empty],
+                    body: Expression::Block(vec![], Box::new(Expression::Empty))
                 }
         );
     }
@@ -987,7 +1080,7 @@ mod test {
                         ],
                     ],
                     ret: vec![Expression::Token("u32".to_owned()),],
-                    body: vec![Statement::Expr(Expression::Integer(BigInt::from(2)))],
+                    body: Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(2))))
                 }
         );
     }

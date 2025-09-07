@@ -11,6 +11,7 @@ pub enum Expression {
     Subscript(Box<Expression>, Vec<Expression>),
     Call(Box<Expression>, Vec<Expression>),
     Build(Box<Expression>, Vec<Vec<Expression>>),
+    Block(Vec<Statement>, Box<Expression>),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
@@ -25,6 +26,7 @@ pub enum Statement {
     Expr(Expression),
     Let(Vec<Expression>, Expression, bool),
     For(Vec<Expression>, Vec<Statement>),
+    If(Expression, Vec<Statement>, Vec<Statement>),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
@@ -32,7 +34,7 @@ pub struct Function {
     pub header: Vec<Expression>,
     pub params: Vec<Vec<Expression>>,
     pub ret: Vec<Expression>,
-    pub body: Vec<Statement>,
+    pub body: Expression,
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]

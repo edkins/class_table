@@ -20,7 +20,11 @@ fn parse_keywords(input: str) -> split_str {
     let mut best = null;
     for k : keyword.classes {
         let suggestion = parse_keyword(k, input);
+        if best == null || suggestion.tail.len < best.tail.len {
+            best = suggestion;
+        }
     }
+    best
 }
 
 class 'class' : keyword {}

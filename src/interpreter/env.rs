@@ -64,10 +64,7 @@ impl Env {
             self.create_var(name, arg.clone(), false);
         }
 
-        let mut result = Value::Unit;
-        for stmt in &function.body {
-            result = self.eval_stmt(stmt);
-        }
+        let result = self.eval_expr(&function.body);
         // TODO: type-check result
         result
     }
@@ -105,7 +102,7 @@ impl Env {
                     _ => panic!("Unsupported variable in let statement"),
                 }
             }
-            Statement::For(header, body) => {
+            _ => {
                 unimplemented!()
             }
         }
@@ -139,6 +136,12 @@ impl Env {
                     }
                 }
                 Value::Struct(class_name, field_values)
+            }
+            Expression::Block(stmts, expr) => {
+                for stmt in stmts {
+                    self.eval_stmt(stmt);
+                }
+                self.eval_expr(expr)
             }
             _ => unimplemented!("Expression type not supported"),
         }
