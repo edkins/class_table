@@ -1,25 +1,21 @@
 class split_str {
-    head : str,
+    head : lexeme,
     specificity : u32,
     tail : str,
 }
 
-class keyword : metaclass {
-    name : token : header,
-    metaclass : metaclass : header,
-    classes : list[keyword] : builtin,
-}
+class lexeme {}
 
-fn parse_keyword(k : keyword, input: str) -> optional[split_str] {
-    let mut result = null;
-    if startswith(input, k.name) {
-        result = split_str {
-            head: k.name,
-            specificity: 1,
-            tail: from(input, len(k.name)),
-        };
+class keyword : lexeme {
+    fn parse(Self, input: str) -> sequence[split_str] {
+        if startswith(input, Self.name) {
+            yield split_str {
+                head: Self {},
+                specificity: 1,
+                tail: from(input, len(Self.name)),
+            };
+        }
     }
-    result
 }
 
 fn better(x: split_str, y: split_str) -> bool {
@@ -32,12 +28,11 @@ fn better(x: split_str, y: split_str) -> bool {
     }
 }
 
-fn parse_keywords(input: str) -> optional[split_str] {
+fn parse_lexemes(input: str) -> optional[split_str] {
     let mut best = null;
     let mut suggestion = null;
-    for k : keyword.classes {
-        suggestion = parse_keyword(k, input);
-        if suggestion != null {
+    for k : implementors(lexeme, "parse") {
+        for suggestion : k.parse(input) {
             if best == null || better(suggestion, best) {
                 best = suggestion;
             }
@@ -47,11 +42,31 @@ fn parse_keywords(input: str) -> optional[split_str] {
 }
 
 class 'class' : keyword {}
-class 'classification' : keyword {}
+
+class identifier : lexeme {
+    name: str
+
+    fn parse(Self, input: str) -> sequence[split_str] {
+        let mut result = null;
+        let name = "";
+        for ch : input {
+            if is_alphanum(ch) || ch == "_" {
+                name += ch;
+                yield split_str {
+                    head: Self { name: name },
+                    specificity: 0,
+                    tail: from(input, len(name)),
+                };
+            } else {
+                break;
+            }
+        }
+    }
+}
 
 fn main(input: str) -> str {
     let mut result = "unable to parse";
-    let s = parse_keywords(input);
+    let s = parse_lexemes(input);
     if s != null {
         result = s.head;
     }
