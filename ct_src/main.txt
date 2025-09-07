@@ -9,19 +9,21 @@ class keyword : metaclass {
     classes : list[keyword] : builtin,
 }
 
-fn parse_keyword(k : keyword, input: str) -> split_str {
+fn parse_keyword(k : keyword, input: str) -> optional[split_str] {
     split_str {
         head: k.name,
         tail: "foo",
     }
 }
 
-fn parse_keywords(input: str) -> split_str {
+fn parse_keywords(input: str) -> optional[split_str] {
     let mut best = null;
     for k : keyword.classes {
         let suggestion = parse_keyword(k, input);
-        if best == null || suggestion.tail.len < best.tail.len {
-            best = suggestion;
+        if suggestion != null {
+            if best == null || suggestion.tail.len < best.tail.len {
+                best = suggestion;
+            }
         }
     }
     best

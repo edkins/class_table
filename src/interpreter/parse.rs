@@ -5,7 +5,7 @@ use nom::{
     character::complete::multispace0,
     combinator::{all_consuming, map, not, opt, value},
     multi::{many0, separated_list0, separated_list1},
-    sequence::{delimited, pair, preceded, terminated},
+    sequence::{delimited, preceded, terminated},
 };
 use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
@@ -80,6 +80,26 @@ fn equals(input: &str) -> IResult<&str, ()> {
     )
     .parse(input)
     //    value((), terminated(tag("="), multispace0)).parse(input)
+}
+
+fn or(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag("||"), multispace0)).parse(input)
+}
+
+fn and(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag("&&"), multispace0)).parse(input)
+}
+
+fn eqeq(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag("=="), multispace0)).parse(input)
+}
+
+fn noteq(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag("!="), multispace0)).parse(input)
+}
+
+fn lt(input: &str) -> IResult<&str, ()> {
+    value((), terminated(terminated(tag("<"), not(tag("<="))), multispace0)).parse(input)
 }
 
 enum Precision {
@@ -193,6 +213,14 @@ fn expression_word(input: &str) -> IResult<&str, Expression> {
     }
 }
 
+fn expression_tight(input: &str) -> IResult<&str, Expression> {
+    alt((
+        delimited(open_paren, expression, close_paren),
+        expr_block,
+        expression_word,
+    )).parse(input)
+}
+
 enum ExpressionSuffix {
     Field(String),
     Build(Vec<Vec<Expression>>),
@@ -242,7 +270,7 @@ fn expression_call_suffix(input: &str) -> IResult<&str, ExpressionSuffix> {
     Ok((input, ExpressionSuffix::Call(args)))
 }
 
-fn expression_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, ExpressionSuffix> {
+fn term_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, ExpressionSuffix> {
     move |input| {
         if curly {
             alt((
@@ -258,10 +286,74 @@ fn expression_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, ExpressionSu
     }
 }
 
-fn expression_base_inner(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
+fn expression_term(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
     move |input| {
-        let (input, mut base) = expression_word(input)?;
-        let (input, suffixes) = many0(expression_suffix(curly)).parse(input)?;
+        let (input, mut base) = expression_tight(input)?;
+        let (input, suffixes) = many0(term_suffix(curly)).parse(input)?;
+        for suffix in suffixes.into_iter() {
+            base = suffix.apply(base);
+        }
+        Ok((input, base))
+    }
+}
+
+struct BinopSuffix {
+    binop: String,
+    rhs: Expression,
+}
+
+impl BinopSuffix {
+    fn apply(self, lhs: Expression) -> Expression {
+        Expression::Call(Box::new(Expression::Token(self.binop)), vec![lhs, self.rhs])
+    }
+
+    fn mapper(binop: &str) -> impl Fn(Expression) -> BinopSuffix {
+        move |rhs| BinopSuffix { binop: binop.to_owned(), rhs }
+    }
+}
+
+fn rel_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, BinopSuffix> {
+    move|input| alt((
+        map(preceded(eqeq, expression_term(curly)), BinopSuffix::mapper("==")),
+        map(preceded(noteq, expression_term(curly)), BinopSuffix::mapper("!=")),
+        map(preceded(lt, expression_term(curly)), BinopSuffix::mapper("<")),
+    )).parse(input)
+}
+
+fn expression_rel(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
+    move |input| {
+        let (input, mut base) = expression_term(curly)(input)?;
+        let (input, suffixes) = opt(rel_suffix(curly)).parse(input)?;
+        for suffix in suffixes.into_iter() {
+            base = suffix.apply(base);
+        }
+        Ok((input, base))
+    }
+}
+
+fn and_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, BinopSuffix> {
+    move|input| map(preceded(and, expression_rel(curly)), BinopSuffix::mapper("&&")).parse(input)
+}
+
+fn expression_and(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
+    move |input| {
+        let (input, mut base) = expression_rel(curly)(input)?;
+        let (input, suffixes) = many0(and_suffix(curly)).parse(input)?;
+        for suffix in suffixes.into_iter() {
+            base = suffix.apply(base);
+        }
+        Ok((input, base))
+    }
+}
+
+fn or_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, BinopSuffix> {
+    move|input| map(preceded(or, expression_and(curly)), BinopSuffix::mapper("||")).parse(input)
+}
+
+fn expression_or(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
+    move |input| {
+        let (input, mut base) = expression_and(curly)(input)?;
+        let (input, suffixes) = many0(or_suffix(curly)).parse(input)?;
         for suffix in suffixes.into_iter() {
             base = suffix.apply(base);
         }
@@ -270,19 +362,11 @@ fn expression_base_inner(curly: bool) -> impl Fn(&str) -> IResult<&str, Expressi
 }
 
 fn expression_base(curly: bool) -> impl Fn(&str) -> IResult<&str, Expression> {
-    move |input| {
-        alt((
-            delimited(open_paren, expression_base_inner(true), close_paren),
-            expr_block,
-            expression_base_inner(curly),
-        ))
-        .parse(input)
-    }
+    expression_or(curly)
 }
 
 fn expression(input: &str) -> IResult<&str, Expression> {
-    let (input, base) = expression_base(true)(input)?;
-    Ok((input, base))
+    expression_base(true)(input)
 }
 
 fn class_cell(input: &str) -> IResult<&str, Expression> {
@@ -384,7 +468,10 @@ fn expr_block(input: &str) -> IResult<&str, Expression> {
     let (input, stmts) = many0(statement).parse(input)?;
     let (input, expr) = opt(expression).parse(input)?;
     let (input, _) = close_brace.parse(input)?;
-    Ok((input, Expression::Block(stmts, Box::new(expr.unwrap_or(Expression::Empty)))))
+    Ok((
+        input,
+        Expression::Block(stmts, Box::new(expr.unwrap_or(Expression::Empty))),
+    ))
 }
 
 fn function(input: &str) -> IResult<&str, Function> {
@@ -1082,6 +1169,22 @@ mod test {
                     ret: vec![Expression::Token("u32".to_owned()),],
                     body: Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(2))))
                 }
+        );
+    }
+
+    #[test]
+    fn expr_eqeq() {
+        let input = "x == y";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Call(
+                    Box::new(Expression::Token("==".to_owned())),
+                    vec![
+                        Expression::Token("x".to_owned()),
+                        Expression::Token("y".to_owned())
+                    ]
+                )
         );
     }
 }
