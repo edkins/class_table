@@ -101,6 +101,18 @@ impl Env {
                     _ => panic!("Invalid types for < operator"),
                 }
             }
+            ">" => {
+                if args.len() != 2 {
+                    panic!("Invalid number of arguments for > operator");
+                }
+                let left = &args[0];
+                let right = &args[1];
+                match (left, right) {
+                    (Value::Number(l), Value::Number(r)) => Some(Value::Bool(l > r)),
+                    (Value::U32(l), Value::U32(r)) => Some(Value::Bool(l > r)),
+                    _ => panic!("Invalid types for > operator"),
+                }
+            }
             "len" => {
                 if args.len() != 1 {
                     panic!("Invalid number of arguments for len function");

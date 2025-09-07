@@ -34,8 +34,9 @@ fn better(x: split_str, y: split_str) -> bool {
 
 fn parse_keywords(input: str) -> optional[split_str] {
     let mut best = null;
+    let mut suggestion = null;
     for k : keyword.classes {
-        let suggestion = parse_keyword(k, input);
+        suggestion = parse_keyword(k, input);
         if suggestion != null {
             if best == null || better(suggestion, best) {
                 best = suggestion;
@@ -46,6 +47,7 @@ fn parse_keywords(input: str) -> optional[split_str] {
 }
 
 class 'class' : keyword {}
+class 'classification' : keyword {}
 
 fn main(input: str) -> str {
     let mut result = "unable to parse";

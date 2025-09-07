@@ -503,25 +503,55 @@ fn statement(input: &str) -> IResult<&str, Statement> {
         let_mut_statement,
         let_statement,
         for_statement,
-        map(expression_if, |if_expr| Statement::Expr(if_expr)),  // allow if expressions not followed by semicolon
         expr_or_assign_statement,
     ))
     .parse(input)
 }
 
+fn if_statement_no_semicolon(input: &str) -> IResult<&str, Statement> {
+    map(expression_if, Statement::Expr).parse(input)
+}
+
+fn ifs_then_statement(input: &str) -> IResult<&str, Vec<Statement>> {
+    let (input, mut ifs) = many0(if_statement_no_semicolon).parse(input)?;
+    let (input, stmt) = statement(input)?;
+
+    ifs.push(stmt);
+    Ok((input, ifs))
+}
+
+fn ifs_then_expr(input: &str) -> IResult<&str, (Vec<Statement>, Expression)> {
+    let (input, ifs) = many0(if_statement_no_semicolon).parse(input)?;
+    let (input, expr) = expression(input)?;
+
+    Ok((input, (ifs, expr)))
+}
+
 fn statement_block(input: &str) -> IResult<&str, Vec<Statement>> {
-    delimited(open_brace, many0(statement), close_brace).parse(input)
+    let (input, block) = expr_block(input)?;
+    if let Expression::Block(mut stmts, result) = block {
+        if *result != Expression::Empty {
+            stmts.push(Statement::Expr(*result));
+        }
+        Ok((input, stmts))
+    } else {
+        unreachable!()
+    }
 }
 
 fn expr_block(input: &str) -> IResult<&str, Expression> {
     let (input, _) = open_brace.parse(input)?;
-    let (input, stmts) = many0(statement).parse(input)?;
-    let (input, expr) = opt(expression).parse(input)?;
+    let (input, stmts) = many0(ifs_then_statement).parse(input)?;
+    let (input, final_stuff) = opt(ifs_then_expr).parse(input)?;
     let (input, _) = close_brace.parse(input)?;
-    Ok((
-        input,
-        Expression::Block(stmts, Box::new(expr.unwrap_or(Expression::Empty))),
-    ))
+    let mut stmts = stmts.concat();
+    match final_stuff {
+        Some((ifs, expr)) => {
+            stmts.extend(ifs);
+            Ok((input, Expression::Block(stmts, Box::new(expr))))
+        }
+        None => Ok((input, Expression::Block(stmts, Box::new(Expression::Empty)))),
+    }
 }
 
 fn function(input: &str) -> IResult<&str, Function> {
@@ -1171,16 +1201,45 @@ mod test {
     }
 
     #[test]
-    fn expr_statement_if_else() {
-        let input = "if x { 2; } else { 3; }";
-        let result = all_consuming(statement).parse(input);
+    fn expr_block_if_else_no_semicolon() {
+        let input = "{ if x { 2; } else { 3; } 4 }";
+        let result = all_consuming(expression).parse(input);
         assert!(
             result.unwrap().1
-                == Statement::Expr(Expression::If(
-                    Box::new(Expression::Token("x".to_owned())),
-                    Box::new(Expression::Block(vec![Statement::Expr(Expression::Integer(BigInt::from(2)))], Box::new(Expression::Empty))),
-                    Box::new(Expression::Block(vec![Statement::Expr(Expression::Integer(BigInt::from(3)))], Box::new(Expression::Empty))),
-                ))
+                == Expression::Block(
+                    vec![
+                        Statement::Expr(Expression::If(
+                            Box::new(Expression::Token("x".to_owned())),
+                            Box::new(Expression::Block(vec![Statement::Expr(Expression::Integer(BigInt::from(2)))], Box::new(Expression::Empty))),
+                            Box::new(Expression::Block(vec![Statement::Expr(Expression::Integer(BigInt::from(3)))], Box::new(Expression::Empty))),
+                        ))
+                    ],
+                    Box::new(Expression::Integer(BigInt::from(4)))
+                )
+        );
+    }
+
+    #[test]
+    fn expr_block_if_else_statement_no_semicolon() {
+        let input = "{ if x { 2; } else { 3; } x = 5; 4 }";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Block(
+                    vec![
+                        Statement::Expr(Expression::If(
+                            Box::new(Expression::Token("x".to_owned())),
+                            Box::new(Expression::Block(vec![Statement::Expr(Expression::Integer(BigInt::from(2)))], Box::new(Expression::Empty))),
+                            Box::new(Expression::Block(vec![Statement::Expr(Expression::Integer(BigInt::from(3)))], Box::new(Expression::Empty))),
+                        )),
+                        Statement::Assign(
+                            "=".to_owned(),
+                            Expression::Token("x".to_owned()),
+                            Expression::Integer(BigInt::from(5)),
+                        ),
+                    ],
+                    Box::new(Expression::Integer(BigInt::from(4)))
+                )
         );
     }
 
@@ -1410,6 +1469,28 @@ mod test {
         assert!(
             result.unwrap().1
                 == Expression::Null
+        );
+    }
+
+    #[test]
+    fn function_with_if() {
+        let input = "fn test() -> u32 { if x { 2 } else { 3 } }";
+        let result = all_consuming(function).parse(input);
+        println!("{:?}", result);
+        assert!(
+            result.unwrap().1
+                == Function {
+                    header: vec![Expression::Token("test".to_owned())],
+                    params: vec![],
+                    ret: vec![Expression::Token("u32".to_owned())],
+                    body: Expression::Block(vec![],
+                        Box::new(Expression::If(
+                            Box::new(Expression::Token("x".to_owned())),
+                            Box::new(Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(2))))),
+                            Box::new(Expression::Block(vec![], Box::new(Expression::Integer(BigInt::from(3))))),
+                        )),
+                    )
+                }
         );
     }
 }

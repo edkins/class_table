@@ -1,4 +1,4 @@
-class Foo {
+classification Foo {
     x : u32,
     y : u32,
 }
