@@ -46,14 +46,14 @@ class 'class' : keyword {}
 class identifier : lexeme {
     name: str
 
-    fn parse(Self, input: str) -> sequence[split_str] {
+    fn parse(input: str) -> sequence[split_str] {
         let mut result = null;
         let name = "";
         for ch : input {
-            if is_alphanum(ch) || ch == "_" {
+            if is_ascii_alphanum(ch) || ch == "_" {
                 name += ch;
                 yield split_str {
-                    head: Self { name: name },
+                    head: identifier { name: name },
                     specificity: 0,
                     tail: from(input, len(name)),
                 };

@@ -1,0 +1,38 @@
+trait regex : str {
+    n_states : int,
+    transitions : ...
+}
+
+trait lexable : lexeme {
+    name : regex : requirement,
+}
+
+trait lexclass : lexable {
+    color : singleton : requirement,
+}
+
+class lexeme : struct : lexable {
+    name : str,
+    color : str,
+}
+
+class word : lexeme : lexable {
+    name : r"[a-zA-Z0-9_]+",
+}
+
+class identifier : word : lexclass {
+    color : "white",
+}
+
+class kw_class : word : lexclass {
+    name : "class",
+    color : "blue",
+}
+
+class operator : lexeme {
+    color : "white",
+}
+
+class le : operator : lexclass {
+    name : "<=",
+}
