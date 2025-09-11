@@ -1,0 +1,20 @@
+trait greeting {
+    fn greet(self : _) -> str;
+}
+
+impl u32:a:greeting {
+    fn greet(self : _) -> str {
+        "hello"
+    }
+}
+
+impl u32:b:greeting {
+    fn greet(self : _) -> str {
+        "goodbye"
+    }
+}
+
+fn main(input: str) -> str {
+    let x = 42u32;
+    a{x}.greet() + b{x}.greet()
+}

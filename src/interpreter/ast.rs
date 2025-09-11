@@ -9,7 +9,8 @@ pub enum Expression {
     Integer(BigInt),
     U32(u32),
     Str(String),
-    MemberAccess(Box<Expression>, String),
+    FieldAccess(Box<Expression>, String),
+    MethodCall(Box<Expression>, String, Vec<Expression>),
     Subscript(Box<Expression>, Vec<Vec<Expression>>),
     Call(Box<Expression>, Vec<Expression>),
     And(Box<Expression>, Box<Expression>),
@@ -49,10 +50,17 @@ pub struct Impl {
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
+pub struct Trait {
+    pub header: Vec<Expression>,
+    pub methods: Vec<Function>,
+}
+
+#[derive(Debug, PartialEq, Clone, Eq)]
 pub enum Declaration {
     Class(ClassTable),
     Fn(Function),
     Impl(Impl),
+    Trait(Trait),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
