@@ -24,7 +24,7 @@ struct VarValue {
 pub enum Value {
     Null,
     Bool(bool),
-    Number(BigInt),
+    Int(BigInt),
     U32(u32),
     Str(String),
     Struct(String, Vec<Value>),
@@ -104,7 +104,7 @@ impl Env {
                 let left = &args[0];
                 let right = &args[1];
                 match (left, right) {
-                    (Value::Number(l), Value::Number(r)) => Some(Value::Bool(l < r)),
+                    (Value::Int(l), Value::Int(r)) => Some(Value::Bool(l < r)),
                     (Value::U32(l), Value::U32(r)) => Some(Value::Bool(l < r)),
                     _ => panic!("Invalid types for < operator"),
                 }
@@ -116,7 +116,7 @@ impl Env {
                 let left = &args[0];
                 let right = &args[1];
                 match (left, right) {
-                    (Value::Number(l), Value::Number(r)) => Some(Value::Bool(l > r)),
+                    (Value::Int(l), Value::Int(r)) => Some(Value::Bool(l > r)),
                     (Value::U32(l), Value::U32(r)) => Some(Value::Bool(l > r)),
                     _ => panic!("Invalid types for > operator"),
                 }
@@ -128,19 +128,26 @@ impl Env {
                 let left = &args[0];
                 let right = &args[1];
                 match (left, right) {
-                    (Value::Number(l), Value::Number(r)) => Some(Value::Number(l + r)),
+                    (Value::Int(l), Value::Int(r)) => Some(Value::Int(l + r)),
                     (Value::U32(l), Value::U32(r)) => Some(Value::U32(l + r)),
                     (Value::Str(l), Value::Str(r)) => Some(Value::Str(l.to_owned() + r)),
                     _ => panic!("Invalid types for + operator"),
                 }
+            }
+            "assert" => {
+                if args.len() != 1 {
+                    panic!("Invalid number of arguments for assert function");
+                }
+                assert!(args[0] == Value::Bool(true));
+                Some(Value::Null)
             }
             "len" => {
                 if args.len() != 1 {
                     panic!("Invalid number of arguments for len function");
                 }
                 match &args[0] {
-                    Value::Str(s) => Some(Value::Number(s.len().into())),
-                    Value::List(l) => Some(Value::Number(l.len().into())),
+                    Value::Str(s) => Some(Value::Int(s.len().into())),
+                    Value::List(l) => Some(Value::Int(l.len().into())),
                     _ => panic!("Invalid type for len function"),
                 }
             }
@@ -158,7 +165,7 @@ impl Env {
                     panic!("Invalid number of arguments for from function");
                 }
                 match (&args[0], &args[1]) {
-                    (Value::Str(s), Value::Number(n)) => {
+                    (Value::Str(s), Value::Int(n)) => {
                         Some(Value::Str(s[n.to_usize().unwrap()..].to_owned()))
                     }
                     (Value::Str(s), Value::U32(n)) => {
@@ -171,10 +178,10 @@ impl Env {
         }
     }
 
-    pub fn run_method(&mut self, impl_name: &str, method: &str, args: &[Value]) -> Value {
+    pub fn run_method(&mut self, impl_name: Option<&str>, method: &str, args: &[Value]) -> Value {
         let method_impl = self
-            .lookup_method_impl(impl_name, method)
-            .unwrap_or_else(|| panic!("Method not found: {}", method))
+            .lookup_method_impl(impl_name, args.get(0), method)
+            .unwrap_or_else(|| panic!("Method not found: {} for {:?} : {:?}", method, args.get(0), impl_name))
             .clone();
         method_impl.check_args(args);
         for (arg, param) in args.iter().zip(&method_impl.params) {
@@ -263,12 +270,44 @@ impl Env {
         None
     }
 
-    fn lookup_method_impl(&self, impl_name: &str, method: &str) -> Option<&Function> {
-        let impl_def = self.lookup_impl(impl_name)?;
+    fn get_class(&self, value: &Value) -> String {
+        match value {
+            Value::Null => "null".to_owned(),
+            Value::Bool(_) => "bool".to_owned(),
+            Value::Int(_) => "int".to_owned(),
+            Value::U32(_) => "u32".to_owned(),
+            Value::Str(_) => "str".to_owned(),
+            Value::Struct(class_name, _) => class_name.clone(),
+            _ => panic!("Unable to get class of {:?}", value),
+        }
+    }
+
+    fn lookup_method_impl(&self, impl_name: Option<&str>, value: Option<&Value>, method: &str) -> Option<&Function> {
         let search_value = Expression::Token(method.to_owned());
-        for func in &impl_def.methods {
-            if func.header[0] == search_value {
-                return Some(func);
+        if let Some(impl_name) = impl_name {
+            let impl_def = self.lookup_impl(impl_name)?;
+            for func in &impl_def.methods {
+                if func.header[0] == search_value {
+                    return Some(func);
+                }
+            }
+        } else if let Some(value) = value {
+            let class_name = self.get_class(value);
+            let class_search_value = Expression::Token(class_name.to_owned());
+            for (module_name, program) in &self.program {
+                if *module_name == self.current_module {
+                    for decl in &program.declarations {
+                        if let Declaration::Impl(impl_def) = decl {
+                            if impl_def.header[0] == class_search_value {
+                                for func in &impl_def.methods {
+                                    if func.header[0] == search_value {
+                                        return Some(func);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         None
@@ -335,7 +374,7 @@ impl Env {
                 .lookup_var_or_global(s)
                 .unwrap_or_else(|| panic!("Variable {} not found", s)),
             Expression::Bool(b) => Value::Bool(*b),
-            Expression::Integer(n) => Value::Number(n.clone()),
+            Expression::Integer(n) => Value::Int(n.clone()),
             Expression::U32(n) => Value::U32(*n),
             Expression::Str(s) => Value::Str(s.clone()),
             Expression::FieldAccess(base, field) => {
@@ -403,18 +442,19 @@ impl Env {
             }
             Expression::MethodCall(base, method, args) => {
                 let base_impl = self.eval_expr(base);
-                if let Value::Impl(impl_name, base_val) = base_impl {
-                    let mut arg_values = vec![*base_val];
-                    arg_values.extend(args.iter().map(|arg| self.eval_expr(arg)));
-                    let mut vars = HashMap::new();
-                    mem::swap(&mut self.vars, &mut vars);
-                    self.stack.push(vars);
-                    let result = self.run_method(&impl_name, method, &arg_values);
-                    self.vars = self.stack.pop().expect("Stack underflow");
-                    result
+                let (impl_name, base_val) = if let Value::Impl(impl_name, base_val) = base_impl {
+                    (Some(impl_name), *base_val)
                 } else {
-                    panic!("Base is not an implementation: {:?}", base_impl);
-                }
+                    (None, base_impl)
+                };
+                let mut arg_values = vec![base_val];
+                arg_values.extend(args.iter().map(|arg| self.eval_expr(arg)));
+                let mut vars = HashMap::new();
+                mem::swap(&mut self.vars, &mut vars);
+                self.stack.push(vars);
+                let result = self.run_method(impl_name.as_deref(), method, &arg_values);
+                self.vars = self.stack.pop().expect("Stack underflow");
+                result
             }
             Expression::If(cond, then_body, else_body) => {
                 let condition = self.eval_expr(cond);
