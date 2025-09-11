@@ -1,0 +1,45 @@
+impl list[P:parser] : separated[S:str] : parser {
+    fn parse(inp: str_read) -> Self {
+        let mut result = Self {};
+        loop {
+            result.append(P.parse(inp));
+            keyword[S].parse(inp);
+        }
+        result
+    }
+}
+
+impl struct[parser] :: parser {
+    fn parse(inp: str_read) -> Self {
+        let mut result = Partial[Self] {};
+        for name : P : Self.fields {
+            if name != null {
+                result.set_field(name, P.parse(inp))
+            }
+        }
+        result.unwrap()
+    }
+}
+
+impl null : keyword[S:str] : parser {
+    fn parse(inp : str_read) -> Self {
+        if inp.read(S) {
+            null
+        } else {
+            panic()
+        }
+    }
+}
+
+class field : struct[parser] {
+    cells : list[expr] : separated[":"]
+}
+
+class 'class' : struct[parser] {
+    :: keyword["class"],
+    header : list[expr] : separated[":"],
+    :: keyword["{"],
+    fields : list[field] : separated[","],
+    :: keyword["}"],
+}
+

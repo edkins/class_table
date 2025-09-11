@@ -5,7 +5,7 @@ use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
 
 use crate::interpreter::ast::{
-    ClassTable, Declaration, Expression, Function, ProgramFile, Statement,
+    ClassTable, Declaration, Expression, Function, Impl, ProgramFile, Statement
 };
 
 #[derive(Debug, PartialEq, Clone, Eq)]
@@ -20,6 +20,8 @@ enum Word {
     Null,
     True,
     False,
+    Impl,
+    Loop,
     Token(String),
     Integer(BigInt),
     U32(u32),
@@ -150,6 +152,8 @@ fn unquoted_word(input: &str) -> IResult<&str, Word> {
         "null" => Ok((input, Word::Null)),
         "true" => Ok((input, Word::True)),
         "false" => Ok((input, Word::False)),
+        "impl" => Ok((input, Word::Impl)),
+        "loop" => Ok((input, Word::Loop)),
         _ => {
             if t.chars().next().unwrap().is_ascii_digit() {
                 if let Some(n) = parse_number(t) {
@@ -231,7 +235,7 @@ fn expression_tight(input: &str) -> IResult<&str, Expression> {
 enum ExpressionSuffix {
     Field(String),
     Build(Vec<Vec<Expression>>),
-    Subscript(Vec<Expression>),
+    Subscript(Vec<Vec<Expression>>),
     Call(Vec<Expression>),
 }
 
@@ -264,7 +268,7 @@ fn expression_build_suffix(input: &str) -> IResult<&str, ExpressionSuffix> {
 fn expression_subscript_suffix(input: &str) -> IResult<&str, ExpressionSuffix> {
     let (input, indices) = delimited(
         open_square,
-        separated_list0(comma, expression),
+        expression_table_contents,
         close_square,
     )
     .parse(input)?;
@@ -409,16 +413,16 @@ fn class_row(input: &str) -> IResult<&str, Vec<Expression>> {
     }
 }
 
+fn expression_table_contents(input: &str) -> IResult<&str, Vec<Vec<Expression>>> {
+    map(opt(terminated(separated_list1(comma, class_row), opt(comma))), Option::unwrap_or_default).parse(input)
+}
+
 fn expression_table(input: &str) -> IResult<&str, Vec<Vec<Expression>>> {
-    map(
-        delimited(
-            open_brace,
-            opt(terminated(separated_list1(comma, class_row), opt(comma))),
-            close_brace,
-        ),
-        Option::unwrap_or_default,
-    )
-    .parse(input)
+    delimited(
+        open_brace,
+        expression_table_contents,
+        close_brace,
+    ).parse(input)
 }
 
 fn class_table(input: &str) -> IResult<&str, ClassTable> {
@@ -479,6 +483,12 @@ fn for_statement(input: &str) -> IResult<&str, Statement> {
     Ok((input, Statement::For(header, body)))
 }
 
+fn loop_statement(input: &str) -> IResult<&str, Statement> {
+    let (input, _) = specific_word(Word::Loop).parse(input)?;
+    let (input, body) = statement_block(input)?;
+    Ok((input, Statement::Loop(body)))
+}
+
 fn expression_if(input: &str) -> IResult<&str, Expression> {
     let (input, _) = specific_word(Word::If).parse(input)?;
     let (input, cond) = class_cell(input)?;
@@ -517,6 +527,7 @@ enum BlockItem {
 fn block_item(input: &str) -> IResult<&str, BlockItem> {
     alt((
         map(for_statement, BlockItem::BlockStatement),
+        map(loop_statement, BlockItem::BlockStatement),
         map(let_mut_statement, BlockItem::Statement),
         map(let_statement, BlockItem::Statement),
         map(assign_statement, BlockItem::Statement),
@@ -603,10 +614,20 @@ fn function(input: &str) -> IResult<&str, Function> {
     ))
 }
 
+fn impl_block(input: &str) -> IResult<&str, Impl> {
+    let (input, _) = specific_word(Word::Impl).parse(input)?;
+    let (input, header) = class_row(input)?;
+    let (input, _) = open_brace(input)?;
+    let (input, methods) = many0(function).parse(input)?;
+    let (input, _) = close_brace(input)?;
+    Ok((input, Impl { header, methods }))
+}
+
 fn declaration(input: &str) -> IResult<&str, Declaration> {
     alt((
         map(class_table, Declaration::Class),
         map(function, Declaration::Fn),
+        map(impl_block, Declaration::Impl),
     ))
     .parse(input)
 }
@@ -835,7 +856,33 @@ mod test {
             result.unwrap().1
                 == Expression::Subscript(
                     Box::new(Expression::Token("a".to_owned())),
-                    vec![Expression::Token("b".to_owned())]
+                    vec![vec![Expression::Token("b".to_owned())]]
+                )
+        );
+    }
+
+    #[test]
+    fn expression_subscript2() {
+        let input = "a[b,c]";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Subscript(
+                    Box::new(Expression::Token("a".to_owned())),
+                    vec![vec![Expression::Token("b".to_owned())], vec![Expression::Token("c".to_owned())]]
+                )
+        );
+    }
+
+    #[test]
+    fn expression_subscript_colon() {
+        let input = "a[b:c]";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::Subscript(
+                    Box::new(Expression::Token("a".to_owned())),
+                    vec![vec![Expression::Token("b".to_owned()), Expression::Token("c".to_owned())]]
                 )
         );
     }
@@ -1533,6 +1580,56 @@ mod test {
         assert!(
             result.unwrap().1
                 == Expression::Bool(false)
+        );
+    }
+
+    #[test]
+    fn loop_empty() {
+        let input = "loop {}";
+        let result = all_consuming(loop_statement).parse(input);
+        assert!(
+            result.unwrap().1
+                == Statement::Loop(vec![])
+        );
+    }
+
+    #[test]
+    fn loop_stmt() {
+        let input = "loop { 1; 2; 3; }";
+        let result = all_consuming(loop_statement).parse(input);
+        assert!(
+            result.unwrap().1
+                == Statement::Loop(vec![
+                    Statement::Expr(Expression::Integer(BigInt::from(1))),
+                    Statement::Expr(Expression::Integer(BigInt::from(2))),
+                    Statement::Expr(Expression::Integer(BigInt::from(3))),
+                ])
+        );
+    }
+
+    #[test]
+    fn impl_empty() {
+        let input = "impl a :: c {}";
+        let result = all_consuming(impl_block).parse(input);
+        assert!(
+            result.unwrap().1
+                == Impl {
+                    header: vec![Expression::Token("a".to_owned()), Expression::Empty, Expression::Token("c".to_owned())],
+                    methods: vec![]
+                }
+        );
+    }
+
+    #[test]
+    fn impl_mid_empty() {
+        let input = "impl a : b : c {}";
+        let result = all_consuming(impl_block).parse(input);
+        assert!(
+            result.unwrap().1
+                == Impl {
+                    header: vec![Expression::Token("a".to_owned()), Expression::Token("b".to_owned()), Expression::Token("c".to_owned())],
+                    methods: vec![]
+                }
         );
     }
 }

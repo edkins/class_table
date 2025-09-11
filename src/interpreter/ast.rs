@@ -10,7 +10,7 @@ pub enum Expression {
     U32(u32),
     Str(String),
     MemberAccess(Box<Expression>, String),
-    Subscript(Box<Expression>, Vec<Expression>),
+    Subscript(Box<Expression>, Vec<Vec<Expression>>),
     Call(Box<Expression>, Vec<Expression>),
     And(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
@@ -31,6 +31,7 @@ pub enum Statement {
     Let(Vec<Expression>, Expression, bool),
     Assign(String, Expression, Expression),
     For(Vec<Expression>, Vec<Statement>),
+    Loop(Vec<Statement>),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
@@ -42,9 +43,16 @@ pub struct Function {
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]
+pub struct Impl {
+    pub header: Vec<Expression>,
+    pub methods: Vec<Function>,
+}
+
+#[derive(Debug, PartialEq, Clone, Eq)]
 pub enum Declaration {
     Class(ClassTable),
     Fn(Function),
+    Impl(Impl),
 }
 
 #[derive(Debug, PartialEq, Clone, Eq)]

@@ -256,6 +256,13 @@ impl Env {
                     panic!("For loop expects a list");
                 }
             }
+            Statement::Loop(body) => {
+                loop {
+                    for stmt in body {
+                        self.eval_stmt(stmt);
+                    }
+                }
+            }
         }
     }
 
