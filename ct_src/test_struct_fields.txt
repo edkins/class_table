@@ -1,0 +1,27 @@
+trait struct_str {
+    fn field_names(self : _) -> list[str];
+}
+
+class Foo {
+    a : str,
+    b : str,
+}
+
+impl Foo :: struct_str {
+    fn field_names(self : _) -> list[str] {
+        ["a","b"]
+    }
+}
+
+fn main(input: str) -> str {
+    let x = Foo {
+        a : 1,
+        b : 2,
+    };
+    let mut result = "";
+    for name : x.field_names() {
+        result += name;
+    }
+    assert(result == "ab");
+    "ok"
+}

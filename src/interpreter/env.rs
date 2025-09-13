@@ -338,6 +338,19 @@ impl Env {
                         }
                         var.value = value;
                     }
+                    "+=" => {
+                        let var = self.vars.get_mut(&name).expect("Variable not found");
+                        if !var.mutable {
+                            panic!("Cannot assign to immutable variable");
+                        }
+                        let new_value = match (&var.value, &value) {
+                            (Value::Int(l), Value::Int(r)) => Value::Int(l + r),
+                            (Value::U32(l), Value::U32(r)) => Value::U32(l + r),
+                            (Value::Str(l), Value::Str(r)) => Value::Str(l.to_owned() + r),
+                            _ => panic!("Invalid types for += operator"),
+                        };
+                        var.value = new_value;
+                    }
                     _ => panic!("Unsupported assignment operator"),
                 }
             }
@@ -377,6 +390,10 @@ impl Env {
             Expression::Integer(n) => Value::Int(n.clone()),
             Expression::U32(n) => Value::U32(*n),
             Expression::Str(s) => Value::Str(s.clone()),
+            Expression::List(elements) => {
+                let values = elements.iter().map(|e| self.eval_expr(e)).collect();
+                Value::List(values)
+            }
             Expression::FieldAccess(base, field) => {
                 let base_val = self.eval_expr(base);
                 self.get_struct_member(base_val, field)

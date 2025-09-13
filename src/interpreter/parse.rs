@@ -102,6 +102,10 @@ fn plus(input: &str) -> IResult<&str, ()> {
     value((), terminated(terminated(tag("+"), not(tag("="))), multispace0)).parse(input)
 }
 
+fn plusequal(input: &str) -> IResult<&str, ()> {
+    value((), terminated(tag("+="), multispace0)).parse(input)
+}
+
 fn lt(input: &str) -> IResult<&str, ()> {
     value((), terminated(terminated(tag("<"), not(tag("="))), multispace0)).parse(input)
 }
@@ -230,9 +234,20 @@ fn expression_word(input: &str) -> IResult<&str, Expression> {
     }
 }
 
+fn expr_list(input: &str) -> IResult<&str, Expression> {
+    let (input, elements) = delimited(
+        open_square,
+        separated_list0(comma, expression),
+        close_square,
+    )
+    .parse(input)?;
+    Ok((input, Expression::List(elements)))
+}
+
 fn expression_tight(input: &str) -> IResult<&str, Expression> {
     alt((
         delimited(open_paren, expression, close_paren),
+        expr_list,
         expr_block,
         expression_word,
     )).parse(input)
@@ -313,7 +328,7 @@ fn term_suffix(curly: bool) -> impl Fn(&str) -> IResult<&str, ExpressionSuffix> 
             ))
             .parse(input)
         } else {
-            alt((expression_field_suffix, expression_subscript_suffix, expression_call_suffix)).parse(input)
+            alt((expression_method_call_suffix, expression_field_suffix, expression_subscript_suffix, expression_call_suffix)).parse(input)
         }
     }
 }
@@ -486,6 +501,7 @@ impl AssignSuffix {
 fn assign_suffix(input: &str) -> IResult<&str, AssignSuffix> {
     alt((
         map(preceded(equals, expression), AssignSuffix::mapper("=")),
+        map(preceded(plusequal, expression), AssignSuffix::mapper("+=")),
     )).parse(input)
 }
 
@@ -1288,6 +1304,27 @@ mod test {
     }
 
     #[test]
+    fn statement_for_method() {
+        let input = "for x : y.method() { 2; }";
+        let result = all_consuming(for_statement).parse(input);
+        println!("{:?}", result);
+        assert!(
+            result.unwrap().1
+                == Statement::For(
+                    vec![
+                        Expression::Token("x".to_owned()),
+                        Expression::MethodCall(
+                            Box::new(Expression::Token("y".to_owned())),
+                            "method".to_owned(),
+                            vec![]
+                        )
+                    ],
+                    vec![Statement::Expr(Expression::Integer(BigInt::from(2)))],
+                )
+        );
+    }
+
+    #[test]
     fn expr_if() {
         let input = "if x { 2 }";
         let result = all_consuming(expression).parse(input);
@@ -1612,6 +1649,20 @@ mod test {
     }
 
     #[test]
+    fn statement_plus_assign() {
+        let input = "x += 5";
+        let result = all_consuming(assign_statement).parse(input);
+        assert!(
+            result.unwrap().1
+                == Statement::Assign(
+                    "+=".to_owned(),
+                    Expression::Token("x".to_owned()),
+                    Expression::Integer(BigInt::from(5))
+                )
+        );
+    }
+
+    #[test]
     fn expr_null() {
         let input = "null";
         let result = all_consuming(expression).parse(input);
@@ -1625,7 +1676,6 @@ mod test {
     fn function_with_if() {
         let input = "fn test() -> u32 { if x { 2 } else { 3 } }";
         let result = all_consuming(function).parse(input);
-        println!("{:?}", result);
         assert!(
             result.unwrap().1
                 == Function {
@@ -1773,6 +1823,45 @@ mod test {
                         Expression::Integer(BigInt::from(3)),
                     ]
                 )
+        );
+    }
+
+    #[test]
+    fn trait_param() {
+        let input = "trait a[T] {}";
+        let result = all_consuming(trait_block).parse(input);
+        assert!(
+            result.unwrap().1
+                == Trait {
+                    header: vec![
+                        Expression::Subscript(Box::new(Expression::Token("a".to_owned())), vec![vec![Expression::Token("T".to_owned())]]),
+                    ],
+                    methods: vec![]
+                }
+        );
+    }
+
+    #[test]
+    fn list_empty() {
+        let input = "[]";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::List(vec![])
+        );
+    }
+
+    #[test]
+    fn list_values() {
+        let input = "[1, 2, 3]";
+        let result = all_consuming(expression).parse(input);
+        assert!(
+            result.unwrap().1
+                == Expression::List(vec![
+                    Expression::Integer(BigInt::from(1)),
+                    Expression::Integer(BigInt::from(2)),
+                    Expression::Integer(BigInt::from(3)),
+                ])
         );
     }
 }

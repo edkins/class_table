@@ -9,6 +9,7 @@ pub enum Expression {
     Integer(BigInt),
     U32(u32),
     Str(String),
+    List(Vec<Expression>),
     FieldAccess(Box<Expression>, String),
     MethodCall(Box<Expression>, String, Vec<Expression>),
     Subscript(Box<Expression>, Vec<Vec<Expression>>),
