@@ -377,7 +377,6 @@ impl Env {
             }
             Expression::Build(cl, fields) => {
                 let buildable = self.program.to_buildable(&self.current_module, cl);
-                println!("Building {:?} with fields {:?}", buildable, fields);
                 match buildable {
                     Buildable::Class(class_module, class_name) => {
                         let mut field_values =
