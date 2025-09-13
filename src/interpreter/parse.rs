@@ -30,6 +30,7 @@ enum Word {
     Loop,
     Trait,
     SelfKeyword,
+    Use,
     Token(String),
     Integer(BigInt),
     U32(u32),
@@ -184,6 +185,7 @@ fn unquoted_word(input: &str) -> IResult<&str, Word> {
         "loop" => Ok((input, Word::Loop)),
         "trait" => Ok((input, Word::Trait)),
         "self" => Ok((input, Word::SelfKeyword)),
+        "use" => Ok((input, Word::Use)),
         _ => {
             if t.chars().next().unwrap().is_ascii_digit() {
                 if let Some(n) = parse_number(t) {
@@ -248,6 +250,17 @@ fn expression_word(input: &str) -> IResult<&str, Expression> {
         Word::True => Ok((input, Expression::Bool(true))),
         Word::False => Ok((input, Expression::Bool(false))),
         Word::SelfKeyword => Ok((input, Expression::SelfKeyword)),
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Tag,
+        ))),
+    }
+}
+
+fn use_word(input: &str) -> IResult<&str, String> {
+    let (input, t) = word.parse(input)?;
+    match t {
+        Word::Token(x) => Ok((input, x)),
         _ => Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
@@ -786,12 +799,22 @@ fn trait_block(input: &str) -> IResult<&str, Trait> {
     Ok((input, Trait { header, methods }))
 }
 
+fn use_declaration(input: &str) -> IResult<&str, Declaration> {
+    let (input, _) = specific_word(Word::Use).parse(input)?;
+    let (input, module) = use_word(input)?;
+    let (input, _) = dot(input)?;
+    let (input, decl) = use_word(input)?;
+    let (input, _) = semicolon(input)?;
+    Ok((input, Declaration::Use(module, decl)))
+}
+
 fn declaration(input: &str) -> IResult<&str, Declaration> {
     alt((
         map(class_table, Declaration::Class),
         map(function, Declaration::Fn),
         map(impl_block, Declaration::Impl),
         map(trait_block, Declaration::Trait),
+        use_declaration,
     ))
     .parse(input)
 }
@@ -2000,5 +2023,12 @@ mod test {
                     Expression::Integer(BigInt::from(3)),
                 ])
         );
+    }
+
+    #[test]
+    fn use_declaration() {
+        let input = "use a.b;";
+        let result = all_consuming(declaration).parse(input);
+        assert!(result.unwrap().1 == Declaration::Use("a".to_owned(), "b".to_owned()));
     }
 }

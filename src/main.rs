@@ -21,15 +21,17 @@ struct Args {
 }
 
 fn run_tests() {
-    for entry in fs::read_dir("ct_src").expect("Failed to read test directory") {
-        let path = entry.unwrap().path();
+    let mut paths: Vec<_> = fs::read_dir("ct_src")
+        .expect("Failed to read test directory")
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    paths.sort();
+
+    for path in paths {
         if path.extension().and_then(|s| s.to_str()) != Some("txt") {
             continue;
         }
-        if !path
-            .to_str()
-            .map_or(false, |s| s.starts_with("ct_src/test"))
-        {
+        if !path.to_str().is_some_and(|s| s.starts_with("ct_src/test")) {
             continue;
         }
         let program_name = path.to_str().unwrap();

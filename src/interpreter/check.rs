@@ -54,6 +54,7 @@ pub struct LoadedFunction {
 pub struct LoadedProgram {
     decls: HashMap<(String, String), LoadedDecl>,
     anon_impls: Vec<LoadedImpl>,
+    uses: Vec<(String, String, String)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -342,6 +343,10 @@ impl LoadedClass {
             })
             .collect()
     }
+
+    pub fn is_struct(&self) -> bool {
+        true // TODO: handle non-struct classes
+    }
 }
 
 impl Expression {
@@ -377,6 +382,7 @@ impl LoadedProgram {
     pub fn new(program: &SyntacticProgram) -> Self {
         let mut decls = HashMap::new();
         let mut anon_impls = vec![];
+        let mut uses = vec![];
 
         for class_name in BUILTIN_CLASSES {
             decls.insert(
@@ -386,33 +392,22 @@ impl LoadedProgram {
         }
 
         decls.insert(
-            ("std".to_owned(), "struct_trait".to_owned()),
-            LoadedDecl::Trait(LoadedTrait {
-                methods: HashMap::from([(
-                    "field_names".to_owned(),
-                    LoadedFunction {
-                        params: vec![ArgCell::SelfKeyword],
-                        body: Expression::Empty,
-                    },
-                )]),
-            }),
+            ("introspect".to_owned(), "examine_struct".to_owned()),
+            LoadedDecl::Class(LoadedClass { body: vec![] }),
         );
 
-        decls.insert(
-            ("std".to_owned(), "struct".to_owned()),
-            LoadedDecl::Impl(LoadedImpl {
-                class_module: "std".to_owned(),
-                class_name: "any".to_owned(),
-                trait_name: Some(("std".to_owned(), "struct_trait".to_owned())),
-                method_impls: HashMap::from([(
-                    "field_names".to_owned(),
-                    LoadedFunction {
-                        params: vec![ArgCell::SelfKeyword],
-                        body: Expression::Builtin,
-                    },
-                )]),
-            }),
-        );
+        anon_impls.push(LoadedImpl {
+            class_module: "introspect".to_owned(),
+            class_name: "examine_struct".to_owned(),
+            trait_name: None,
+            method_impls: HashMap::from([(
+                "field_names".to_owned(),
+                LoadedFunction {
+                    params: vec![ArgCell::SelfKeyword],
+                    body: Expression::Builtin,
+                },
+            )]),
+        });
 
         for (module_name, module) in &program.modules {
             for decl in &module.declarations {
@@ -461,10 +456,17 @@ impl LoadedProgram {
                             }
                         }
                     }
+                    Declaration::Use(use_module, use_decl) => {
+                        uses.push((module_name.clone(), use_module.clone(), use_decl.clone()));
+                    }
                 }
             }
         }
-        let result = LoadedProgram { decls, anon_impls };
+        let result = LoadedProgram {
+            decls,
+            anon_impls,
+            uses,
+        };
         result.check_consistency();
         result
     }
@@ -551,21 +553,76 @@ impl LoadedProgram {
             .and_then(LoadedDecl::as_opt_trait)
     }
 
-    pub fn lookup_anon_impl(
+    fn visible_superclasses(
         &self,
-        class_module: String,
-        class_name: String,
-        method: &str,
-    ) -> Option<&LoadedFunction> {
-        for impl_def in &self.anon_impls {
-            if impl_def.class_module != class_module || impl_def.class_name != class_name {
-                continue;
-            }
-            if let Some(method_impl) = impl_def.lookup_method_impl(method) {
-                return Some(method_impl);
+        source_module: &str,
+        class_module: &str,
+        class_name: &str,
+    ) -> Vec<(String, String)> {
+        // everything is a superclass of itself
+        assert!(self.can_see(source_module, class_module, class_name));
+        let mut result = vec![(class_module.to_owned(), class_name.to_owned())];
+
+        if let Some(class) = self.lookup_class(class_module, class_name)
+            && class.is_struct()
+        {
+            // If it's declared then it's a struct
+            // If it's a struct then it's an examine_struct
+            if self.can_see(source_module, "introspect", "examine_struct") {
+                result.push(("introspect".to_owned(), "examine_struct".to_owned()));
             }
         }
-        None
+        result
+    }
+
+    fn can_see(&self, source_module: &str, module: &str, class: &str) -> bool {
+        if module == "std" && BUILTIN_CLASSES.contains(&class) {
+            return true;
+        }
+        if source_module == module {
+            // TODO: should we check the class is actually real at this point?
+            return true;
+        }
+        for (used_source, used_module, used_class) in &self.uses {
+            if used_source == source_module && used_module == module && used_class == class {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn lookup_anon_impl(
+        &self,
+        source_module: &str,
+        class_module: &str,
+        class_name: &str,
+        method: &str,
+    ) -> &LoadedFunction {
+        let mut candidate_names = vec![];
+        let mut candidates = vec![];
+        let superclasses = self.visible_superclasses(source_module, class_module, class_name);
+        for (super_module, super_class) in superclasses {
+            for impl_def in &self.anon_impls {
+                if impl_def.class_module != super_module || impl_def.class_name != super_class {
+                    continue;
+                }
+                if let Some(method_impl) = impl_def.lookup_method_impl(method) {
+                    candidate_names.push(format!("{}::{}", super_module, super_class));
+                    candidates.push(method_impl);
+                }
+            }
+        }
+        match candidates.len() {
+            0 => panic!(
+                "No anon impl for {}::{}::{}",
+                class_module, class_name, method
+            ),
+            1 => candidates[0],
+            _ => panic!(
+                "Ambiguous anon impl for {}::{}::{} (candidates: {:?})",
+                class_module, class_name, method, candidate_names
+            ),
+        }
     }
 
     pub fn to_buildable(&self, current_module: &str, expr: &Expression) -> Buildable {

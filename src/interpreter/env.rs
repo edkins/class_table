@@ -154,39 +154,26 @@ impl Env {
         }
     }
 
-    fn run_builtin_method(
-        &self,
-        impl_name: Option<(String, String)>,
-        method: &str,
-        args: &[Value],
-    ) -> Option<Value> {
-        match (
-            impl_name.clone().map(|p| p.0),
-            impl_name.clone().map(|p| p.1),
-            method,
-        ) {
-            (Some(ref module), Some(ref name), "field_names")
-                if module == "std" && name == "struct" =>
-            {
+    fn run_builtin_method(&self, method: &str, args: &[Value]) -> Value {
+        match method {
+            "field_names" => {
                 if args.len() != 1 {
                     panic!("Invalid number of arguments for field_names method");
                 }
-                match args.first() {
-                    Some(Value::Struct(class_module, class_name, fields)) => {
+                match &args[0] {
+                    Value::Struct(class_module, class_name, fields) => {
                         let cl = self
                             .program
                             .lookup_class(class_module, class_name)
                             .expect("No such class");
                         let field_names = cl.field_names();
                         assert!(field_names.len() == fields.len());
-                        Some(Value::List(
-                            field_names.into_iter().map(Value::Str).collect(),
-                        ))
+                        Value::List(field_names.into_iter().map(Value::Str).collect())
                     }
                     _ => panic!("Invalid argument for field_names method"),
                 }
             }
-            _ => None,
+            _ => panic!("Unknown builtin method: {}", method),
         }
     }
 
@@ -196,25 +183,17 @@ impl Env {
         method: &str,
         args: &[Value],
     ) -> Value {
-        if let Some(result) = self.run_builtin_method(impl_name.clone(), method, args) {
-            return result;
-        }
-
         let method_impl = self
             .lookup_method_impl(impl_name.clone(), args.first(), method)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Method not found: {} for {:?} : {:?}",
-                    method,
-                    args.first(),
-                    impl_name.clone()
-                )
-            })
             .clone();
         method_impl.check_args(args);
         for (arg, param) in args.iter().zip(&method_impl.params) {
             let name = param.name();
             self.create_var(name, arg.clone(), false);
+        }
+
+        if method_impl.body == Expression::Builtin {
+            return self.run_builtin_method(method, args);
         }
 
         // TODO: type-check result
@@ -276,17 +255,29 @@ impl Env {
         impl_name: Option<(String, String)>,
         value: Option<&Value>,
         method: &str,
-    ) -> Option<&LoadedFunction> {
+    ) -> &LoadedFunction {
         if let Some((impl_module, impl_name)) = impl_name {
-            let impl_def = self.program.lookup_impl(&impl_module, &impl_name)?;
-            return impl_def.lookup_method_impl(method);
+            let impl_def = self
+                .program
+                .lookup_impl(&impl_module, &impl_name)
+                .unwrap_or_else(|| panic!("Impl not found: {}::{}", impl_module, impl_name));
+            impl_def.lookup_method_impl(method).unwrap_or_else(|| {
+                panic!(
+                    "Method {} not found in impl {}::{}",
+                    method, impl_module, impl_name
+                )
+            })
         } else if let Some(value) = value {
             let (class_module_name, class_name) = self.get_class(value);
-            return self
-                .program
-                .lookup_anon_impl(class_module_name, class_name, method);
+            self.program.lookup_anon_impl(
+                &self.current_module,
+                &class_module_name,
+                &class_name,
+                method,
+            )
+        } else {
+            panic!("Cannot lookup method {} without impl or value", method);
         }
-        None
     }
 
     fn eval_stmt(&mut self, stmt: &Statement) {

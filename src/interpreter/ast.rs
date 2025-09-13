@@ -60,6 +60,7 @@ pub struct Trait {
 
 #[derive(Debug, PartialEq, Clone, Eq)]
 pub enum Declaration {
+    Use(String, String),
     Class(ClassTable),
     Fn(Function),
     Impl(Impl),
