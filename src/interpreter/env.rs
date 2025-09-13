@@ -11,8 +11,8 @@ use crate::interpreter::ast::{
 pub struct Env {
     program: Vec<(String, ProgramFile)>,
     current_module: String,
-    vars: HashMap<String, VarValue>,
-    stack: Vec<HashMap<String, VarValue>>,
+    vars: HashMap<VarName, VarValue>,
+    stack: Vec<HashMap<VarName, VarValue>>,
 }
 
 struct VarValue {
@@ -31,6 +31,21 @@ pub enum Value {
     Impl(String, Box<Value>),
     List(Vec<Value>),
     Class(String, String),
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum VarName {
+    Name(String),
+    SelfKeyword,
+}
+
+impl VarName {
+    fn expect_name(&self) -> String {
+        match self {
+            VarName::Name(s) => s.clone(),
+            VarName::SelfKeyword => panic!("Expected variable name, got 'self'"),
+        }
+    }
 }
 
 // pub struct LoadedClass {
@@ -215,26 +230,29 @@ impl Env {
         result
     }
 
-    fn create_var(&mut self, name: String, value: Value, mutable: bool) {
+    fn create_var(&mut self, name: VarName, value: Value, mutable: bool) {
         if self.vars.contains_key(&name) {
-            panic!("Variable {} already exists", name);
+            panic!("Variable {:?} already exists", name);
         }
         self.vars.insert(name, VarValue { value, mutable });
     }
 
-    fn lookup_var_or_global(&self, name: &str) -> Option<Value> {
+    fn lookup_var_or_global(&self, name: &VarName) -> Option<Value> {
         let local = self.vars.get(name).map(|var| &var.value);
         if local.is_some() {
             return local.cloned();
         }
-        self.lookup_class(name).map(|_| Value::Class(self.current_module.clone(), name.to_owned()))
+        match name {
+            VarName::Name(name) => self.lookup_class(name).map(|_| Value::Class(self.current_module.clone(), name.to_owned())),
+            VarName::SelfKeyword => panic!("'self' used outside of method"),
+        }
     }
 
-    fn remove_var(&mut self, name: &str) {
+    fn remove_var(&mut self, name: &VarName) {
         if self.vars.contains_key(name) {
             self.vars.remove(name);
         } else {
-            panic!("Variable {} not found", name);
+            panic!("Variable {:?} not found", name);
         }
     }
 
@@ -322,7 +340,7 @@ impl Env {
                 let value = self.eval_expr(expr);
                 match var.as_slice() {
                     &[Expression::Token(ref x)] => {
-                        self.create_var(x.clone(), value, *mutable);
+                        self.create_var(VarName::Name(x.clone()), value, *mutable);
                     }
                     _ => panic!("Unsupported variable in let statement"),
                 }
@@ -384,7 +402,7 @@ impl Env {
         match expr {
             Expression::Empty | Expression::Null => Value::Null,
             Expression::Token(s) => self
-                .lookup_var_or_global(s)
+                .lookup_var_or_global(&VarName::Name(s.clone()))
                 .unwrap_or_else(|| panic!("Variable {} not found", s)),
             Expression::Bool(b) => Value::Bool(*b),
             Expression::Integer(n) => Value::Int(n.clone()),
@@ -399,7 +417,7 @@ impl Env {
                 self.get_struct_member(base_val, field)
             }
             Expression::Build(cl, fields) => {
-                let class_name = self.to_name(cl);
+                let class_name = self.to_name(cl).expect_name();
                 match self.get_buildable(&class_name) {
                     Some(Buildable::Class) => {
                         let mut field_values = vec![Value::Null; self.get_class_field_count(&class_name)];
@@ -448,7 +466,7 @@ impl Env {
                 }
             }
             Expression::Call(f, args) => {
-                let func = self.to_name(f);
+                let func = self.to_name(f).expect_name();
                 let arg_values = args.iter().map(|arg| self.eval_expr(arg)).collect::<Vec<_>>();
                 let mut vars = HashMap::new();
                 mem::swap(&mut self.vars, &mut vars);
@@ -491,17 +509,19 @@ impl Env {
         }
     }
 
-    fn to_name(&self, expr: &Expression) -> String {
+    fn to_name(&self, expr: &Expression) -> VarName {
         match expr {
-            Expression::Token(s) => s.clone(),
+            Expression::Token(s) => VarName::Name(s.clone()),
+            Expression::SelfKeyword => VarName::SelfKeyword,
             _ => panic!("Expected token, got {:?}", expr),
         }
     }
 
-    fn typed_to_name(&self, expr: &[Expression]) -> String {
+    fn typed_to_name(&self, expr: &[Expression]) -> VarName {
         match expr {
-            [Expression::Token(s), _] => s.clone(),
-            _ => panic!("Expected typed token"),
+            [Expression::Token(s), _] => VarName::Name(s.clone()),
+            [Expression::SelfKeyword] => VarName::SelfKeyword,
+            _ => panic!("Expected typed token or self, got {:?}", expr),
         }
     }
 
@@ -556,7 +576,7 @@ impl Env {
                 // TODO: also allow classes to have a metaclass in a different module
                 if let Declaration::Class(class) = decl && module_name == metaclass_module {
                     if class.header.len() >= 2 && class.header[1] == search_value {
-                        result.push(Value::Class(module_name.clone(), self.to_name(&class.header[0])));
+                        result.push(Value::Class(module_name.clone(), self.to_name(&class.header[0]).expect_name()));
                     }
                 }
             }

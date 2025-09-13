@@ -23,6 +23,7 @@ enum Word {
     Impl,
     Loop,
     Trait,
+    SelfKeyword,
     Token(String),
     Integer(BigInt),
     U32(u32),
@@ -164,6 +165,7 @@ fn unquoted_word(input: &str) -> IResult<&str, Word> {
         "impl" => Ok((input, Word::Impl)),
         "loop" => Ok((input, Word::Loop)),
         "trait" => Ok((input, Word::Trait)),
+        "self" => Ok((input, Word::SelfKeyword)),
         _ => {
             if t.chars().next().unwrap().is_ascii_digit() {
                 if let Some(n) = parse_number(t) {
@@ -227,6 +229,7 @@ fn expression_word(input: &str) -> IResult<&str, Expression> {
         Word::Null => Ok((input, Expression::Null)),
         Word::True => Ok((input, Expression::Bool(true))),
         Word::False => Ok((input, Expression::Bool(false))),
+        Word::SelfKeyword => Ok((input, Expression::SelfKeyword)),
         _ => Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
@@ -1787,6 +1790,24 @@ mod test {
                     methods: vec![Function {
                         header: vec![Expression::Token("b".to_owned())],
                         params: vec![],
+                        ret: vec![Expression::Token("u32".to_owned())],
+                        body: Expression::Empty,
+                    }]
+                }
+        );
+    }
+
+    #[test]
+    fn trait_fn_self() {
+        let input = "trait a { fn b(self) -> u32; }";
+        let result = all_consuming(trait_block).parse(input);
+        assert!(
+            result.unwrap().1
+                == Trait {
+                    header: vec![Expression::Token("a".to_owned())],
+                    methods: vec![Function {
+                        header: vec![Expression::Token("b".to_owned())],
+                        params: vec![vec![Expression::SelfKeyword]],
                         ret: vec![Expression::Token("u32".to_owned())],
                         body: Expression::Empty,
                     }]

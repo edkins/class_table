@@ -1,15 +1,15 @@
 trait greeting {
-    fn greet(self : _) -> str;
+    fn greet(self) -> str;
 }
 
 impl u32:a:greeting {
-    fn greet(self : _) -> str {
+    fn greet(self) -> str {
         "hello"
     }
 }
 
 impl u32:b:greeting {
-    fn greet(self : _) -> str {
+    fn greet(self) -> str {
         "goodbye"
     }
 }

@@ -1,5 +1,5 @@
 trait struct_str {
-    fn field_names(self : _) -> list[str];
+    fn field_names(self) -> list[str];
 }
 
 class Foo {
@@ -8,7 +8,7 @@ class Foo {
 }
 
 impl Foo :: struct_str {
-    fn field_names(self : _) -> list[str] {
+    fn field_names(self) -> list[str] {
         ["a","b"]
     }
 }
