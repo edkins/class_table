@@ -27,7 +27,7 @@ pub enum Value {
     Int(BigInt),
     U32(u32),
     Str(String),
-    Struct(String, Vec<Value>),
+    Struct(String, String, Vec<Value>),
     Impl(String, Vec<TraitArg>, Box<Value>),
     List(Vec<Value>),
     Class(String, String),
@@ -66,7 +66,7 @@ impl Function {
 }
 
 enum Buildable {
-    Class(String),
+    Class(String, String),
     Impl(String, Vec<TraitArg>),
 }
 
@@ -194,7 +194,42 @@ impl Env {
         }
     }
 
-    pub fn run_method(&mut self, impl_name: Option<&str>, method: &str, args: &[Value]) -> Value {
+    fn run_builtin_method(
+        &self,
+        impl_name: Option<&str>,
+        method: &str,
+        args: &[Value],
+    ) -> Option<Value> {
+        match (impl_name, method) {
+            (Some("struct"), "field_names") => {
+                if args.len() != 1 {
+                    panic!("Invalid number of arguments for field_names method");
+                }
+                match args.first() {
+                    Some(Value::Struct(class_module, class_name, fields)) => {
+                        let cl = self.lookup_class(class_module, class_name).expect("No such class");
+                        assert!(cl.body.len() == fields.len());
+                        let field_names = cl
+                            .body
+                            .iter()
+                            .map(|f| self.to_name(&f[0]).expect_name())
+                            .collect::<Vec<_>>();
+                        Some(Value::List(
+                            field_names.into_iter().map(Value::Str).collect(),
+                        ))
+                    }
+                    _ => panic!("Invalid argument for field_names method"),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn run_method(&mut self, impl_name: Option<&str>, method: &str, args: &[Value]) -> Value {
+        if let Some(result) = self.run_builtin_method(impl_name, method, args) {
+            return result;
+        }
+
         let method_impl = self
             .lookup_method_impl(impl_name, args.first(), method)
             .unwrap_or_else(|| {
@@ -250,7 +285,7 @@ impl Env {
         }
         match name {
             VarName::Name(name) => self
-                .lookup_class(name)
+                .lookup_class(&self.current_module, name)
                 .map(|_| Value::Class(self.current_module.clone(), name.to_owned())),
             VarName::SelfKeyword => panic!("'self' used outside of method"),
         }
@@ -264,10 +299,14 @@ impl Env {
         }
     }
 
-    fn lookup_class(&self, name: &str) -> Option<&ClassTable> {
+    fn is_builtin_trait(&self, name: &str) -> bool {
+        matches!(name, "struct")
+    }
+
+    fn lookup_class(&self, module: &str, name: &str) -> Option<&ClassTable> {
         let search_value = Expression::Token(name.to_owned());
         for (module_name, program) in &self.program {
-            if *module_name == self.current_module {
+            if *module_name == module {
                 for decl in &program.declarations {
                     if let Declaration::Class(class) = decl && class.header[0] == search_value {
                         return Some(class);
@@ -292,14 +331,14 @@ impl Env {
         None
     }
 
-    fn get_class(&self, value: &Value) -> String {
+    fn get_class(&self, value: &Value) -> (String, String) {
         match value {
-            Value::Null => "null".to_owned(),
-            Value::Bool(_) => "bool".to_owned(),
-            Value::Int(_) => "int".to_owned(),
-            Value::U32(_) => "u32".to_owned(),
-            Value::Str(_) => "str".to_owned(),
-            Value::Struct(class_name, _) => class_name.clone(),
+            Value::Null => ("std".to_owned(), "null".to_owned()),
+            Value::Bool(_) => ("std".to_owned(), "bool".to_owned()),
+            Value::Int(_) => ("std".to_owned(), "int".to_owned()),
+            Value::U32(_) => ("std".to_owned(), "u32".to_owned()),
+            Value::Str(_) => ("std".to_owned(), "str".to_owned()),
+            Value::Struct(module_name, class_name, _) => (module_name.clone(), class_name.clone()),
             _ => panic!("Unable to get class of {:?}", value),
         }
     }
@@ -319,10 +358,11 @@ impl Env {
                 }
             }
         } else if let Some(value) = value {
-            let class_name = self.get_class(value);
+            let (class_module_name, class_name) = self.get_class(value);
+            println!("Looking for method {:?} in impl {:?} for value {:?}, class {:?}::{:?}", method, impl_name, value, class_module_name, class_name);
             let class_search_value = Expression::Token(class_name.to_owned());
             for (module_name, program) in &self.program {
-                if *module_name == self.current_module {
+                if *module_name == class_module_name {
                     for decl in &program.declarations {
                         if let Declaration::Impl(impl_def) = decl && impl_def.header[0] == class_search_value {
                             for func in &impl_def.methods {
@@ -424,21 +464,21 @@ impl Env {
             Expression::Build(cl, fields) => {
                 let buildable = self.to_buildable(cl);
                 match buildable {
-                    Buildable::Class(class_name) => {
+                    Buildable::Class(class_module, class_name) => {
                         let mut field_values =
-                            vec![Value::Null; self.get_class_field_count(&class_name)];
+                            vec![Value::Null; self.get_class_field_count(&class_module, &class_name)];
                         for field in fields {
                             match field.as_slice() {
                                 &[Expression::Token(ref name), ref expr] => {
                                     let value = self.eval_expr(expr);
-                                    field_values[self.get_class_field_index(&class_name, name)] =
+                                    field_values[self.get_class_field_index(&class_module, &class_name, name)] =
                                         value;
                                     // TODO: check it's the correct type
                                 }
                                 _ => panic!("Invalid field assignment in constructor"),
                             }
                         }
-                        Value::Struct(class_name, field_values)
+                        Value::Struct(class_module, class_name, field_values)
                     }
                     Buildable::Impl(head, args) => {
                         assert!(fields.len() == 1);
@@ -552,9 +592,11 @@ impl Env {
 
     fn to_buildable(&self, expr: &Expression) -> Buildable {
         let (head, args) = self.to_head_and_args(expr);
-        if self.lookup_class(&head).is_some() {
+        if self.is_builtin_trait(&head) {
+            Buildable::Impl(head, args)
+        } else if self.lookup_class(&self.current_module, &head).is_some() {
             assert!(args.is_empty(), "Class cannot have trait args");
-            Buildable::Class(head)
+            Buildable::Class(self.current_module.clone(), head)
         } else if self.lookup_impl(&head).is_some() {
             Buildable::Impl(head, args)
         } else {
@@ -562,15 +604,15 @@ impl Env {
         }
     }
 
-    fn get_class_field_count(&self, class_name: &str) -> usize {
-        let cl = self.lookup_class(class_name).expect("No such class");
+    fn get_class_field_count(&self, class_module: &str, class_name: &str) -> usize {
+        let cl = self.lookup_class(class_module, class_name).expect("No such class");
         cl.body.len()
     }
 
-    fn get_class_field_index(&self, class_name: &str, field: &str) -> usize {
+    fn get_class_field_index(&self, class_module: &str, class_name: &str, field: &str) -> usize {
         // TODO: this assumes the first column is the one to look up. This may change with metaclasses.
         let search_value = Expression::Token(field.to_owned());
-        let cl = self.lookup_class(class_name).expect("No such class");
+        let cl = self.lookup_class(class_module, class_name).expect("No such class");
         cl.body
             .iter()
             .position(|f| f[0] == search_value)
@@ -579,8 +621,8 @@ impl Env {
 
     fn get_struct_member(&self, structure: Value, field: &str) -> Value {
         match structure {
-            Value::Struct(class_name, fields) => {
-                let field_index = self.get_class_field_index(&class_name, field);
+            Value::Struct(class_module, class_name, fields) => {
+                let field_index = self.get_class_field_index(&class_module, &class_name, field);
                 fields[field_index].clone()
             }
             Value::Class(module_name, class_name) => {
