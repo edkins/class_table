@@ -1,0 +1,19 @@
+class Foo {
+    a : u32,
+    b : u32,
+}
+
+impl Foo:: {
+    fn conc(self) -> str {
+        self.a + self.b
+    }
+}
+
+fn main(input: str) -> str {
+    let x = Foo {
+        a : 1,
+        b : 2,
+    }
+    assert(x.conc() == 3);
+    "ok"
+}

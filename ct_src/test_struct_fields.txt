@@ -5,8 +5,8 @@ class Foo {
 
 fn main(input: str) -> str {
     let x = Foo {
-        a : 1,
-        b : 2,
+        a : "a",
+        b : "b",
     };
     let y = struct[str]{x};
     let mut result = "";

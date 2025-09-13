@@ -260,18 +260,6 @@ impl Env {
         }
     }
 
-    fn get_class(&self, value: &Value) -> (String, String) {
-        match value {
-            Value::Null => ("std".to_owned(), "null".to_owned()),
-            Value::Bool(_) => ("std".to_owned(), "bool".to_owned()),
-            Value::Int(_) => ("std".to_owned(), "int".to_owned()),
-            Value::U32(_) => ("std".to_owned(), "u32".to_owned()),
-            Value::Str(_) => ("std".to_owned(), "str".to_owned()),
-            Value::Struct(module_name, class_name, _) => (module_name.clone(), class_name.clone()),
-            _ => panic!("Unable to get class of {:?}", value),
-        }
-    }
-
     fn lookup_method_impl(
         &self,
         impl_name: Option<(String, String)>,
@@ -281,10 +269,9 @@ impl Env {
         if let Some((impl_module, impl_name)) = impl_name {
             let impl_def = self.program.lookup_impl(&impl_module, &impl_name)?;
             return impl_def.lookup_method_impl(method);
-        } else if let Some(_value) = value {
-            // let (class_module_name, class_name) = self.get_class(value);
-            // let class_def = self.program.lookup_class(&class_module_name, &class_name)?;
-            unimplemented!(); //return class_def.lookup_method_impl(method);
+        } else if let Some(value) = value {
+            let (class_module_name, class_name) = self.get_class(value);
+            return self.program.lookup_anon_impl(class_module_name, class_name, method);
         }
         None
     }
@@ -374,6 +361,7 @@ impl Env {
             }
             Expression::Build(cl, fields) => {
                 let buildable = self.program.to_buildable(&self.current_module, cl);
+                println!("Building {:?} with fields {:?}", buildable, fields);
                 match buildable {
                     Buildable::Class(class_module, class_name) => {
                         let mut field_values =
@@ -466,8 +454,20 @@ impl Env {
         }
     }
 
+    fn get_class(&self, value: &Value) -> (String, String) {
+        match value {
+            Value::Null => ("std".to_owned(), "null".to_owned()),
+            Value::Bool(_) => ("std".to_owned(), "bool".to_owned()),
+            Value::Int(_) => ("std".to_owned(), "int".to_owned()),
+            Value::U32(_) => ("std".to_owned(), "u32".to_owned()),
+            Value::Str(_) => ("std".to_owned(), "str".to_owned()),
+            Value::Struct(module_name, class_name, _) => (module_name.clone(), class_name.clone()),
+            _ => panic!("Unable to get class of {:?}", value),
+        }
+    }
+
     fn get_class_field_count(&self, class_module: &str, class_name: &str) -> usize {
-        let cl = self.program.lookup_class(class_module, class_name).expect("No such class");
+        let cl = self.program.lookup_class(class_module, class_name).unwrap_or_else(|| panic!("No such class: {}::{}", class_module, class_name));
         cl.num_fields()
     }
 
