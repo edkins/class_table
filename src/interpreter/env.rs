@@ -89,10 +89,8 @@ impl Env {
         let search_value = Expression::Token(name.to_owned());
         for (_, program) in &self.program {
             for decl in &program.declarations {
-                if let Declaration::Fn(func) = decl {
-                    if func.header[0] == search_value {
-                        return Some(func);
-                    }
+                if let Declaration::Fn(func) = decl && func.header[0] == search_value {
+                    return Some(func);
                 }
             }
         }
@@ -198,12 +196,12 @@ impl Env {
 
     pub fn run_method(&mut self, impl_name: Option<&str>, method: &str, args: &[Value]) -> Value {
         let method_impl = self
-            .lookup_method_impl(impl_name, args.get(0), method)
+            .lookup_method_impl(impl_name, args.first(), method)
             .unwrap_or_else(|| {
                 panic!(
                     "Method not found: {} for {:?} : {:?}",
                     method,
-                    args.get(0),
+                    args.first(),
                     impl_name
                 )
             })
@@ -214,9 +212,8 @@ impl Env {
             self.create_var(name, arg.clone(), false);
         }
 
-        let result = self.eval_expr(&method_impl.body);
         // TODO: type-check result
-        result
+        self.eval_expr(&method_impl.body)
     }
 
     pub fn run(&mut self, func: &str, args: &[Value]) -> Value {
@@ -235,9 +232,8 @@ impl Env {
             self.create_var(name, arg.clone(), false);
         }
 
-        let result = self.eval_expr(&function.body);
         // TODO: type-check result
-        result
+        self.eval_expr(&function.body)
     }
 
     fn create_var(&mut self, name: VarName, value: Value, mutable: bool) {
@@ -273,10 +269,8 @@ impl Env {
         for (module_name, program) in &self.program {
             if *module_name == self.current_module {
                 for decl in &program.declarations {
-                    if let Declaration::Class(class) = decl {
-                        if class.header[0] == search_value {
-                            return Some(class);
-                        }
+                    if let Declaration::Class(class) = decl && class.header[0] == search_value {
+                        return Some(class);
                     }
                 }
             }
@@ -289,10 +283,8 @@ impl Env {
         for (module_name, program) in &self.program {
             if *module_name == self.current_module {
                 for decl in &program.declarations {
-                    if let Declaration::Impl(impl_def) = decl {
-                        if impl_def.header[1] == search_value {
-                            return Some(impl_def);
-                        }
+                    if let Declaration::Impl(impl_def) = decl && impl_def.header[1] == search_value {
+                        return Some(impl_def);
                     }
                 }
             }
@@ -332,12 +324,10 @@ impl Env {
             for (module_name, program) in &self.program {
                 if *module_name == self.current_module {
                     for decl in &program.declarations {
-                        if let Declaration::Impl(impl_def) = decl {
-                            if impl_def.header[0] == class_search_value {
-                                for func in &impl_def.methods {
-                                    if func.header[0] == search_value {
-                                        return Some(func);
-                                    }
+                        if let Declaration::Impl(impl_def) = decl && impl_def.header[0] == class_search_value {
+                            for func in &impl_def.methods {
+                                if func.header[0] == search_value {
+                                    return Some(func);
                                 }
                             }
                         }
@@ -614,15 +604,11 @@ impl Env {
         for (module_name, program) in &self.program {
             for decl in &program.declarations {
                 // TODO: also allow classes to have a metaclass in a different module
-                if let Declaration::Class(class) = decl
-                    && module_name == metaclass_module
-                {
-                    if class.header.len() >= 2 && class.header[1] == search_value {
-                        result.push(Value::Class(
-                            module_name.clone(),
-                            self.to_name(&class.header[0]).expect_name(),
-                        ));
-                    }
+                if let Declaration::Class(class) = decl && module_name == metaclass_module && class.header.len() >= 2 && class.header[1] == search_value {
+                    result.push(Value::Class(
+                        module_name.clone(),
+                        self.to_name(&class.header[0]).expect_name(),
+                    ));
                 }
             }
         }
