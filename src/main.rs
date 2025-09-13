@@ -22,7 +22,14 @@ fn main() {
     let args = Args::parse();
     let text = fs::read_to_string(&args.program).expect("Failed to read program file");
     let program = parse::parse(&text);
-    let filename_base = args.program.rsplit('/').next().unwrap().split('.').next().unwrap();
+    let filename_base = args
+        .program
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .split('.')
+        .next()
+        .unwrap();
     let mut env = Env::new(filename_base, program);
     let input = fs::read_to_string(args.input).expect("Failed to read input file");
     match env.run("main", &[Value::Str(input)]) {

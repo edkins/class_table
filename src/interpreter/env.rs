@@ -5,7 +5,7 @@ use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::interpreter::ast::{
-    ClassTable, Declaration, Expression, Function, Impl, ProgramFile, Statement
+    ClassTable, Declaration, Expression, Function, Impl, ProgramFile, Statement,
 };
 
 pub struct Env {
@@ -28,7 +28,7 @@ pub enum Value {
     U32(u32),
     Str(String),
     Struct(String, Vec<Value>),
-    Impl(String, Box<Value>),
+    Impl(String, Vec<TraitArg>, Box<Value>),
     List(Vec<Value>),
     Class(String, String),
 }
@@ -66,8 +66,13 @@ impl Function {
 }
 
 enum Buildable {
-    Class,
-    Impl,
+    Class(String),
+    Impl(String, Vec<TraitArg>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraitArg {
+    Class(String),
 }
 
 impl Env {
@@ -183,20 +188,25 @@ impl Env {
                     (Value::Str(s), Value::Int(n)) => {
                         Some(Value::Str(s[n.to_usize().unwrap()..].to_owned()))
                     }
-                    (Value::Str(s), Value::U32(n)) => {
-                        Some(Value::Str(s[*n as usize..].to_owned()))
-                    }
+                    (Value::Str(s), Value::U32(n)) => Some(Value::Str(s[*n as usize..].to_owned())),
                     _ => panic!("Invalid types for from function"),
                 }
             }
-            _ => None
+            _ => None,
         }
     }
 
     pub fn run_method(&mut self, impl_name: Option<&str>, method: &str, args: &[Value]) -> Value {
         let method_impl = self
             .lookup_method_impl(impl_name, args.get(0), method)
-            .unwrap_or_else(|| panic!("Method not found: {} for {:?} : {:?}", method, args.get(0), impl_name))
+            .unwrap_or_else(|| {
+                panic!(
+                    "Method not found: {} for {:?} : {:?}",
+                    method,
+                    args.get(0),
+                    impl_name
+                )
+            })
             .clone();
         method_impl.check_args(args);
         for (arg, param) in args.iter().zip(&method_impl.params) {
@@ -243,7 +253,9 @@ impl Env {
             return local.cloned();
         }
         match name {
-            VarName::Name(name) => self.lookup_class(name).map(|_| Value::Class(self.current_module.clone(), name.to_owned())),
+            VarName::Name(name) => self
+                .lookup_class(name)
+                .map(|_| Value::Class(self.current_module.clone(), name.to_owned())),
             VarName::SelfKeyword => panic!("'self' used outside of method"),
         }
     }
@@ -300,7 +312,12 @@ impl Env {
         }
     }
 
-    fn lookup_method_impl(&self, impl_name: Option<&str>, value: Option<&Value>, method: &str) -> Option<&Function> {
+    fn lookup_method_impl(
+        &self,
+        impl_name: Option<&str>,
+        value: Option<&Value>,
+        method: &str,
+    ) -> Option<&Function> {
         let search_value = Expression::Token(method.to_owned());
         if let Some(impl_name) = impl_name {
             let impl_def = self.lookup_impl(impl_name)?;
@@ -388,13 +405,11 @@ impl Env {
                     panic!("For loop expects a list");
                 }
             }
-            Statement::Loop(body) => {
-                loop {
-                    for stmt in body {
-                        self.eval_stmt(stmt);
-                    }
+            Statement::Loop(body) => loop {
+                for stmt in body {
+                    self.eval_stmt(stmt);
                 }
-            }
+            },
         }
     }
 
@@ -417,15 +432,17 @@ impl Env {
                 self.get_struct_member(base_val, field)
             }
             Expression::Build(cl, fields) => {
-                let class_name = self.to_name(cl).expect_name();
-                match self.get_buildable(&class_name) {
-                    Some(Buildable::Class) => {
-                        let mut field_values = vec![Value::Null; self.get_class_field_count(&class_name)];
+                let buildable = self.to_buildable(cl);
+                match buildable {
+                    Buildable::Class(class_name) => {
+                        let mut field_values =
+                            vec![Value::Null; self.get_class_field_count(&class_name)];
                         for field in fields {
                             match field.as_slice() {
                                 &[Expression::Token(ref name), ref expr] => {
                                     let value = self.eval_expr(expr);
-                                    field_values[self.get_class_field_index(&class_name, name)] = value;
+                                    field_values[self.get_class_field_index(&class_name, name)] =
+                                        value;
                                     // TODO: check it's the correct type
                                 }
                                 _ => panic!("Invalid field assignment in constructor"),
@@ -433,14 +450,13 @@ impl Env {
                         }
                         Value::Struct(class_name, field_values)
                     }
-                    Some(Buildable::Impl) => {
+                    Buildable::Impl(head, args) => {
                         assert!(fields.len() == 1);
                         assert!(fields[0].len() == 1);
                         // TODO: check the thing actually supports this impl
                         let value = self.eval_expr(&fields[0][0]);
-                        Value::Impl(class_name, Box::new(value))
+                        Value::Impl(head, args, Box::new(value))
                     }
-                    None => panic!("Class not found: {}", class_name),
                 }
             }
             Expression::Block(stmts, expr) => {
@@ -467,7 +483,10 @@ impl Env {
             }
             Expression::Call(f, args) => {
                 let func = self.to_name(f).expect_name();
-                let arg_values = args.iter().map(|arg| self.eval_expr(arg)).collect::<Vec<_>>();
+                let arg_values = args
+                    .iter()
+                    .map(|arg| self.eval_expr(arg))
+                    .collect::<Vec<_>>();
                 let mut vars = HashMap::new();
                 mem::swap(&mut self.vars, &mut vars);
                 self.stack.push(vars);
@@ -477,11 +496,12 @@ impl Env {
             }
             Expression::MethodCall(base, method, args) => {
                 let base_impl = self.eval_expr(base);
-                let (impl_name, base_val) = if let Value::Impl(impl_name, base_val) = base_impl {
-                    (Some(impl_name), *base_val)
-                } else {
-                    (None, base_impl)
-                };
+                let (impl_name, _impl_args, base_val) =
+                    if let Value::Impl(impl_name, impl_args, base_val) = base_impl {
+                        (Some(impl_name), impl_args, *base_val)
+                    } else {
+                        (None, Vec::new(), base_impl)
+                    };
                 let mut arg_values = vec![base_val];
                 arg_values.extend(args.iter().map(|arg| self.eval_expr(arg)));
                 let mut vars = HashMap::new();
@@ -494,12 +514,8 @@ impl Env {
             Expression::If(cond, then_body, else_body) => {
                 let condition = self.eval_expr(cond);
                 match condition {
-                    Value::Bool(true) => {
-                        self.eval_expr(then_body)
-                    }
-                    Value::Bool(false) => {
-                        self.eval_expr(else_body)
-                    }
+                    Value::Bool(true) => self.eval_expr(then_body),
+                    Value::Bool(false) => self.eval_expr(else_body),
                     _ => {
                         unimplemented!("If condition not true or false: {:?}", condition)
                     }
@@ -517,6 +533,25 @@ impl Env {
         }
     }
 
+    fn to_head_and_args(&self, expr: &Expression) -> (String, Vec<TraitArg>) {
+        match expr {
+            Expression::Token(s) => (s.clone(), vec![]),
+            Expression::Subscript(head, args) => {
+                let head = self.to_name(head).expect_name();
+                let args = args.iter().map(|e| self.to_trait_arg(&e[0])).collect();
+                (head, args)
+            }
+            _ => panic!("Expected head and args, got {:?}", expr),
+        }
+    }
+
+    fn to_trait_arg(&self, expr: &Expression) -> TraitArg {
+        match expr {
+            Expression::Token(s) => TraitArg::Class(s.clone()),
+            _ => panic!("Expected trait arg, got {:?}", expr),
+        }
+    }
+
     fn typed_to_name(&self, expr: &[Expression]) -> VarName {
         match expr {
             [Expression::Token(s), _] => VarName::Name(s.clone()),
@@ -525,13 +560,15 @@ impl Env {
         }
     }
 
-    fn get_buildable(&self, class_name: &str) -> Option<Buildable> {
-        if self.lookup_class(class_name).is_some() {
-            Some(Buildable::Class)
-        } else if self.lookup_impl(class_name).is_some() {
-            Some(Buildable::Impl)
+    fn to_buildable(&self, expr: &Expression) -> Buildable {
+        let (head, args) = self.to_head_and_args(expr);
+        if self.lookup_class(&head).is_some() {
+            assert!(args.is_empty(), "Class cannot have trait args");
+            Buildable::Class(head)
+        } else if self.lookup_impl(&head).is_some() {
+            Buildable::Impl(head, args)
         } else {
-            None
+            panic!("No class or impl found for: {}", head)
         }
     }
 
@@ -561,7 +598,10 @@ impl Env {
                 match field {
                     "name" => Value::Str(class_name),
                     "classes" => Value::List(self.list_classes(&module_name, &class_name)),
-                    _ => panic!("Unknown class field {} for class {}::{}", field, module_name, class_name),
+                    _ => panic!(
+                        "Unknown class field {} for class {}::{}",
+                        field, module_name, class_name
+                    ),
                 }
             }
             _ => panic!("Not a struct or class: {:?}", structure),
@@ -574,9 +614,14 @@ impl Env {
         for (module_name, program) in &self.program {
             for decl in &program.declarations {
                 // TODO: also allow classes to have a metaclass in a different module
-                if let Declaration::Class(class) = decl && module_name == metaclass_module {
+                if let Declaration::Class(class) = decl
+                    && module_name == metaclass_module
+                {
                     if class.header.len() >= 2 && class.header[1] == search_value {
-                        result.push(Value::Class(module_name.clone(), self.to_name(&class.header[0]).expect_name()));
+                        result.push(Value::Class(
+                            module_name.clone(),
+                            self.to_name(&class.header[0]).expect_name(),
+                        ));
                     }
                 }
             }
