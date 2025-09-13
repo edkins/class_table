@@ -574,11 +574,8 @@ fn assign_suffix(input: &str) -> IResult<&str, AssignSuffix> {
 
 fn assign_statement(input: &str) -> IResult<&str, Statement> {
     let (input, expr) = expression(input)?;
-    let (input, suffix) = opt(assign_suffix).parse(input)?;
-    Ok((
-        input,
-        suffix.map_or(Statement::Expr(expr.clone()), |s| s.apply(expr)),
-    ))
+    let (input, suffix) = assign_suffix.parse(input)?;
+    Ok((input, suffix.apply(expr)))
 }
 
 fn let_statement(input: &str) -> IResult<&str, Statement> {
@@ -612,6 +609,7 @@ fn loop_statement(input: &str) -> IResult<&str, Statement> {
 }
 
 fn expression_if(input: &str) -> IResult<&str, Expression> {
+    let original_input = input;
     let (input, _) = specific_word(Word::If).parse(input)?;
     let (input, cond) = class_cell(input)?;
     let (input, then_branch) = expr_block(input)?;
@@ -620,6 +618,7 @@ fn expression_if(input: &str) -> IResult<&str, Expression> {
         alt((expr_block, expression_if)),
     ))
     .parse(input)?;
+    println!("Parsed if expression: {}", original_input);
     Ok((
         input,
         Expression::If(
@@ -679,27 +678,34 @@ fn expr_block(input: &str) -> IResult<&str, Expression> {
     let (input, _) = open_brace.parse(input)?;
     let (input, items) = many0(block_item).parse(input)?;
     let mut needs_semicolon = false;
+    let mut was_expr = false;
     let mut stmts = vec![];
     for item in items {
         if item == BlockItem::Semicolon {
             needs_semicolon = false;
+            was_expr = false;
         } else {
+            assert!(!needs_semicolon);
             match item {
                 BlockItem::BlockStatement(stmt) => {
                     stmts.push(stmt);
                     needs_semicolon = false;
+                    was_expr = false;
                 }
                 BlockItem::Statement(stmt) => {
                     stmts.push(stmt);
                     needs_semicolon = true;
+                    was_expr = false;
                 }
                 BlockItem::BlockExpr(expr) => {
                     stmts.push(Statement::Expr(expr));
                     needs_semicolon = false;
+                    was_expr = true;
                 }
                 BlockItem::Expr(expr) => {
                     stmts.push(Statement::Expr(expr));
                     needs_semicolon = true;
+                    was_expr = true;
                 }
                 BlockItem::Semicolon => {
                     unreachable!()
@@ -707,7 +713,7 @@ fn expr_block(input: &str) -> IResult<&str, Expression> {
             }
         }
     }
-    let expr = if needs_semicolon {
+    let expr = if was_expr {
         match stmts.pop().expect("Stack shouldn't be empty at this point") {
             Statement::Expr(expr) => expr,
             _ => {

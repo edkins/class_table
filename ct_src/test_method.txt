@@ -11,9 +11,9 @@ impl Foo:: {
 
 fn main(input: str) -> str {
     let x = Foo {
-        a : 1,
-        b : 2,
-    }
-    assert(x.sum() == 3);
+        a : 1u32,
+        b : 2u32,
+    };
+    assert(x.sum() == 3u32);
     "ok"
 }
