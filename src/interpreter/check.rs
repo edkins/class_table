@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
-use crate::interpreter::ast::{ClassTable, Declaration, Expression, Function, Impl, ProgramFile, Trait};
-
+use crate::interpreter::ast::{
+    ClassTable, Declaration, Expression, Function, Impl, ProgramFile, Trait,
+};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum VarName {
@@ -30,9 +31,8 @@ enum LoadedDecl {
 pub struct LoadedImpl {
     class_module: String,
     class_name: String,
-    trait_module: String,
-    trait_name: String,
-    methods_impls: HashMap<String, LoadedFunction>,
+    trait_name: Option<(String, String)>,
+    method_impls: HashMap<String, LoadedFunction>,
 }
 
 #[derive(Clone, Debug)]
@@ -108,8 +108,8 @@ enum ColumnSchema {
     Type,
 }
 
-const BUILTIN_CLASSES : &[&str] = &["null", "u32", "int", "str", "bool"];
-const BUILTIN_TRAITS : &[&str] = &["struct"];
+const BUILTIN_CLASSES: &[&str] = &["null", "u32", "int", "str", "bool"];
+const BUILTIN_TRAITS: &[&str] = &["struct"];
 
 impl Buildable {
     fn new(expr: &Expression, program: &SyntacticProgram) -> Self {
@@ -134,27 +134,45 @@ impl Buildable {
 }
 
 impl LoadedImpl {
-    fn from_impl(module_name: &str, impl_def: &Impl, program: &SyntacticProgram) -> (Option<String>, Self) {
+    fn from_impl(
+        module_name: &str,
+        impl_def: &Impl,
+        program: &SyntacticProgram,
+    ) -> (Option<String>, Self) {
         assert!(impl_def.header.len() == 3);
         let impl_name = match &impl_def.header[1] {
             Expression::Token(s) => Some(s.clone()),
             Expression::Empty => None,
             _ => panic!("Invalid impl header: {:?}", impl_def.header),
         };
-        let mut methods_impls = HashMap::new();
+        let mut method_impls = HashMap::new();
         for method in &impl_def.methods {
             let (method_name, loaded_function) = LoadedFunction::from_fn(method, program);
-            assert!(!methods_impls.contains_key(&method_name));
-            methods_impls.insert(method_name, loaded_function);
+            assert!(!method_impls.contains_key(&method_name));
+            method_impls.insert(method_name, loaded_function);
         }
-        let (class_module, class_name) = program.lookup_class(&impl_def.header[0].to_name().expect_name());
-        (impl_name, LoadedImpl {
-            class_module,
-            class_name,
-            trait_module: module_name.to_owned(),
-            trait_name: impl_def.header[2].to_name().expect_name(),
-            methods_impls
-        })
+        let (class_module, class_name) =
+            program.lookup_class(&impl_def.header[0].to_name().expect_name());
+        let trait_name = match &impl_def.header[2] {
+            Expression::Token(s) => {
+                if BUILTIN_TRAITS.contains(&(s as &str)) {
+                    Some(("std".to_owned(), s.clone()))
+                } else {
+                    Some((module_name.to_owned(), s.clone()))
+                }
+            }
+            Expression::Empty => None,
+            _ => panic!("Invalid impl header: {:?}", impl_def.header),
+        };
+        (
+            impl_name,
+            LoadedImpl {
+                class_module,
+                class_name,
+                trait_name,
+                method_impls,
+            },
+        )
     }
 }
 
@@ -207,7 +225,7 @@ impl LoadedDecl {
 
 impl LoadedImpl {
     pub fn lookup_method_impl(&self, name: &str) -> Option<&LoadedFunction> {
-        self.methods_impls.get(name)
+        self.method_impls.get(name)
     }
 }
 
@@ -223,7 +241,10 @@ impl LoadedFunction {
             let arg = ArgCell::new(param, program);
             params.push(arg);
         }
-        let loaded_function = LoadedFunction { params, body: func.body.clone() };
+        let loaded_function = LoadedFunction {
+            params,
+            body: func.body.clone(),
+        };
         (function_name, loaded_function)
     }
 
@@ -253,15 +274,20 @@ impl SyntacticProgram {
         }
         for (module_name, module) in &self.modules {
             for decl in &module.declarations {
-                if let Declaration::Class(class) = decl && class.header[0] == Expression::Token(name.to_owned()) {
+                if let Declaration::Class(class) = decl
+                    && class.header[0] == Expression::Token(name.to_owned())
+                {
                     candidates.push((module_name.clone(), name.to_owned()));
                 }
             }
         }
         match candidates.len() {
             0 => panic!("Class not found: {}", name),
-            1 => {candidates.pop().unwrap()}
-            _ => panic!("Ambiguous class name: {} (candidates: {:?})", name, candidates),
+            1 => candidates.pop().unwrap(),
+            _ => panic!(
+                "Ambiguous class name: {} (candidates: {:?})",
+                name, candidates
+            ),
         }
     }
 }
@@ -271,7 +297,7 @@ impl ClassCell {
         match (schema, expr) {
             (ColumnSchema::Name, Expression::Token(s)) => Self::Name(s.clone()),
             (ColumnSchema::Type, Expression::Token(s)) => {
-                let (module_name, class) = program.lookup_class(&s);
+                let (module_name, class) = program.lookup_class(s);
                 Self::Class(module_name, class)
             }
             _ => panic!("Invalid class cell expression: {:?}", expr),
@@ -282,10 +308,7 @@ impl ClassCell {
 impl LoadedClass {
     fn new(body: &[Vec<Expression>], program: &SyntacticProgram) -> Self {
         let mut class_body = Vec::new();
-        let column_schema = vec![
-            ColumnSchema::Name,
-            ColumnSchema::Type,
-        ]; // TODO: get from metaclass?
+        let column_schema = vec![ColumnSchema::Name, ColumnSchema::Type]; // TODO: get from metaclass?
         for row in body {
             let mut class_row = Vec::new();
             assert!(row.len() == column_schema.len());
@@ -298,10 +321,7 @@ impl LoadedClass {
         LoadedClass { body: class_body }
     }
 
-    fn from_classtable(
-        class: &ClassTable,
-        program: &SyntacticProgram,
-    ) -> (String, Self) {
+    fn from_classtable(class: &ClassTable, program: &SyntacticProgram) -> (String, Self) {
         match &class.header[0] {
             Expression::Token(name) => (name.clone(), Self::new(&class.body, program)),
             _ => panic!("Invalid class header: {:?}", class.header),
@@ -314,12 +334,13 @@ impl LoadedClass {
 
     pub fn field_names(&self) -> Vec<String> {
         // TODO: what if metaclass changes order of fields or columns?
-        self.body.iter().map(|row| {
-            match &row[0] {
+        self.body
+            .iter()
+            .map(|row| match &row[0] {
                 ClassCell::Name(name) => name.clone(),
                 _ => panic!("Expected field name, got {:?}", row[0]),
-            }
-        }).collect()
+            })
+            .collect()
     }
 }
 
@@ -358,40 +379,82 @@ impl LoadedProgram {
         let mut anon_impls = vec![];
 
         for class_name in BUILTIN_CLASSES {
-            decls.insert(("std".to_owned(), class_name.to_string()), LoadedDecl::Class(LoadedClass { body: vec![] }));
+            decls.insert(
+                ("std".to_owned(), class_name.to_string()),
+                LoadedDecl::Class(LoadedClass { body: vec![] }),
+            );
         }
 
-        decls.insert(("std".to_owned(), "struct".to_owned()), LoadedDecl::Trait(LoadedTrait { methods: HashMap::from(
-            [("field_names".to_owned(), LoadedFunction {
-                params: vec![ArgCell::SelfKeyword],
-                body: Expression::Builtin,
-            })]
-        ) }));
+        decls.insert(
+            ("std".to_owned(), "struct_trait".to_owned()),
+            LoadedDecl::Trait(LoadedTrait {
+                methods: HashMap::from([(
+                    "field_names".to_owned(),
+                    LoadedFunction {
+                        params: vec![ArgCell::SelfKeyword],
+                        body: Expression::Empty,
+                    },
+                )]),
+            }),
+        );
+
+        decls.insert(
+            ("std".to_owned(), "struct".to_owned()),
+            LoadedDecl::Impl(LoadedImpl {
+                class_module: "std".to_owned(),
+                class_name: "any".to_owned(),
+                trait_name: Some(("std".to_owned(), "struct_trait".to_owned())),
+                method_impls: HashMap::from([(
+                    "field_names".to_owned(),
+                    LoadedFunction {
+                        params: vec![ArgCell::SelfKeyword],
+                        body: Expression::Builtin,
+                    },
+                )]),
+            }),
+        );
 
         for (module_name, module) in &program.modules {
             for decl in &module.declarations {
                 match decl {
                     Declaration::Class(class) => {
-                        let (class_name, loaded_class) = LoadedClass::from_classtable(class, program);
+                        let (class_name, loaded_class) =
+                            LoadedClass::from_classtable(class, program);
                         assert!(!decls.contains_key(&(module_name.clone(), class_name.clone())));
-                        decls.insert((module_name.clone(), class_name), LoadedDecl::Class(loaded_class));
+                        decls.insert(
+                            (module_name.clone(), class_name),
+                            LoadedDecl::Class(loaded_class),
+                        );
                     }
                     Declaration::Fn(func) => {
-                        let (function_name, loaded_function) = LoadedFunction::from_fn(func, program);
+                        let (function_name, loaded_function) =
+                            LoadedFunction::from_fn(func, program);
                         assert!(!decls.contains_key(&(module_name.clone(), function_name.clone())));
-                        decls.insert((module_name.clone(), function_name), LoadedDecl::Function(loaded_function));
+                        decls.insert(
+                            (module_name.clone(), function_name),
+                            LoadedDecl::Function(loaded_function),
+                        );
                     }
                     Declaration::Trait(trait_def) => {
                         let (trait_name, methods) = LoadedTrait::from_trait(trait_def, program);
                         assert!(!decls.contains_key(&(module_name.clone(), trait_name.clone())));
-                        decls.insert((module_name.clone(), trait_name), LoadedDecl::Trait(methods));
+                        decls.insert(
+                            (module_name.clone(), trait_name),
+                            LoadedDecl::Trait(methods),
+                        );
                     }
                     Declaration::Impl(impl_def) => {
-                        let (impl_name, loaded_impl) = LoadedImpl::from_impl(module_name, impl_def, program);
+                        let (impl_name, loaded_impl) =
+                            LoadedImpl::from_impl(module_name, impl_def, program);
                         match impl_name {
                             Some(impl_name) => {
-                                assert!(!decls.contains_key(&(module_name.clone(), impl_name.clone())));
-                                decls.insert((module_name.clone(), impl_name), LoadedDecl::Impl(loaded_impl));
+                                assert!(
+                                    !decls.contains_key(&(module_name.clone(), impl_name.clone()))
+                                );
+                                decls.insert(
+                                    (module_name.clone(), impl_name),
+                                    LoadedDecl::Impl(loaded_impl),
+                                );
                             }
                             None => {
                                 anon_impls.push(loaded_impl);
@@ -407,27 +470,53 @@ impl LoadedProgram {
     }
 
     fn check_consistency(&self) {
-        for (module_name, impl_name) in self.list_impls() {
-            let impl_def = self.lookup_impl(&module_name, &impl_name).unwrap_or_else(||panic!("Impl {}::{} not found", module_name, impl_name));
-            let trait_def = self.lookup_trait(&impl_def.trait_module, &impl_def.trait_name)
-                .unwrap_or_else(|| panic!("Trait '{}' not found for impl '{}::{}'", impl_def.trait_name, module_name, impl_name));
+        for (module_name, impl_name) in self.list_trait_impls() {
+            let impl_def = self
+                .lookup_impl(&module_name, &impl_name)
+                .unwrap_or_else(|| panic!("Impl {}::{} not found", module_name, impl_name));
+            let (trait_module, trait_name) = impl_def.trait_name.clone().unwrap();
+            let trait_def = self
+                .lookup_trait(&trait_module, &trait_name)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Trait '{}::{}' not found for impl '{}::{}'",
+                        trait_module, trait_name, module_name, impl_name
+                    )
+                });
             for (method_name, trait_method) in &trait_def.methods {
-                let impl_method = impl_def.lookup_method_impl(method_name)
-                    .unwrap_or_else(|| panic!("Method '{}' of trait '{}' not implemented in impl '{}::{}'", method_name, impl_def.trait_name, module_name, impl_name));
-                assert!(impl_method.implements(trait_method), "Method '{}' of trait '{}' in impl '{}::{}' does not match signature", method_name, impl_def.trait_name, module_name, impl_name);
+                let impl_method = impl_def.lookup_method_impl(method_name).unwrap_or_else(|| {
+                    panic!(
+                        "Method '{}' of trait '{}::{}' not implemented in impl '{}::{}'",
+                        method_name, trait_module, trait_name, module_name, impl_name
+                    )
+                });
+                assert!(
+                    impl_method.implements(trait_method),
+                    "Method '{}' of trait '{}::{}' in impl '{}::{}' does not match signature",
+                    method_name,
+                    trait_module,
+                    trait_name,
+                    module_name,
+                    impl_name
+                );
             }
-            for method_name in impl_def.methods_impls.keys() {
+            for method_name in impl_def.method_impls.keys() {
                 if !trait_def.methods.contains_key(method_name) {
-                    panic!("Method '{}' in impl '{}::{}' not found in trait '{}'", method_name, module_name, impl_name, impl_def.trait_name);
+                    panic!(
+                        "Method '{}' in impl '{}::{}' not found in trait '{}::{}'",
+                        method_name, module_name, impl_name, trait_module, trait_name
+                    );
                 }
             }
         }
     }
 
-    fn list_impls(&self) -> Vec<(String, String)> {
+    fn list_trait_impls(&self) -> Vec<(String, String)> {
         let mut result = vec![];
         for ((impl_module, impl_name), decl) in &self.decls {
-            if matches!(decl, LoadedDecl::Impl(_)) {
+            if let LoadedDecl::Impl(impl_def) = decl
+                && impl_def.trait_name.is_some()
+            {
                 result.push((impl_module.clone(), impl_name.clone()));
             }
         }
@@ -436,25 +525,38 @@ impl LoadedProgram {
 
     pub fn lookup_fn(&self, module_name: &str, name: &str) -> Option<&LoadedFunction> {
         let search_key = (module_name.to_owned(), name.to_owned());
-        self.decls.get(&search_key).and_then(LoadedDecl::as_opt_function)
+        self.decls
+            .get(&search_key)
+            .and_then(LoadedDecl::as_opt_function)
     }
 
     pub fn lookup_class(&self, module: &str, name: &str) -> Option<&LoadedClass> {
         let search_key = (module.to_owned(), name.to_owned());
-        self.decls.get(&search_key).and_then(LoadedDecl::as_opt_class)
+        self.decls
+            .get(&search_key)
+            .and_then(LoadedDecl::as_opt_class)
     }
 
     pub fn lookup_impl(&self, module: &str, name: &str) -> Option<&LoadedImpl> {
         let search_key = (module.to_owned(), name.to_owned());
-        self.decls.get(&search_key).and_then(LoadedDecl::as_opt_impl)
+        self.decls
+            .get(&search_key)
+            .and_then(LoadedDecl::as_opt_impl)
     }
 
     pub fn lookup_trait(&self, module: &str, name: &str) -> Option<&LoadedTrait> {
         let search_key = (module.to_owned(), name.to_owned());
-        self.decls.get(&search_key).and_then(LoadedDecl::as_opt_trait)
+        self.decls
+            .get(&search_key)
+            .and_then(LoadedDecl::as_opt_trait)
     }
 
-    pub fn lookup_anon_impl(&self, class_module: String, class_name: String, method: &str) -> Option<&LoadedFunction> {
+    pub fn lookup_anon_impl(
+        &self,
+        class_module: String,
+        class_name: String,
+        method: &str,
+    ) -> Option<&LoadedFunction> {
         for impl_def in &self.anon_impls {
             if impl_def.class_module != class_module || impl_def.class_name != class_name {
                 continue;
@@ -477,13 +579,20 @@ impl LoadedProgram {
             //     candidates.push(Buildable::Impl(module.to_owned(), head.clone(), args.clone()));
             // }
             if self.lookup_impl(module, &head).is_some() {
-                candidates.push(Buildable::Impl(module.to_owned(), head.clone(), args.clone()));
+                candidates.push(Buildable::Impl(
+                    module.to_owned(),
+                    head.clone(),
+                    args.clone(),
+                ));
             }
         }
         match candidates.len() {
-            0 => panic!("No such buildable: {}", head),
+            0 => panic!("No such buildable: ({}|std)::{}", current_module, head),
             1 => candidates.pop().unwrap(),
-            _ => panic!("Ambiguous buildable: {} (candidates: {:?})", head, candidates),
+            _ => panic!(
+                "Ambiguous buildable: {} (candidates: {:?})",
+                head, candidates
+            ),
         }
     }
 }

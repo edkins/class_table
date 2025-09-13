@@ -4,9 +4,10 @@ use std::{collections::HashMap, mem};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
-use crate::interpreter::{ast::{
-    Expression, ProgramFile, Statement,
-}, check::{Buildable, LoadedFunction, LoadedProgram, SyntacticProgram, TraitArg, VarName}};
+use crate::interpreter::{
+    ast::{Expression, ProgramFile, Statement},
+    check::{Buildable, LoadedFunction, LoadedProgram, SyntacticProgram, TraitArg, VarName},
+};
 
 pub struct Env {
     program: LoadedProgram,
@@ -164,13 +165,18 @@ impl Env {
             impl_name.clone().map(|p| p.1),
             method,
         ) {
-            (Some(ref module), Some(ref name), "field_names") if module == "std" && name == "struct" => {
+            (Some(ref module), Some(ref name), "field_names")
+                if module == "std" && name == "struct" =>
+            {
                 if args.len() != 1 {
                     panic!("Invalid number of arguments for field_names method");
                 }
                 match args.first() {
                     Some(Value::Struct(class_module, class_name, fields)) => {
-                        let cl = self.program.lookup_class(class_module, class_name).expect("No such class");
+                        let cl = self
+                            .program
+                            .lookup_class(class_module, class_name)
+                            .expect("No such class");
                         let field_names = cl.field_names();
                         assert!(field_names.len() == fields.len());
                         Some(Value::List(
@@ -184,7 +190,12 @@ impl Env {
         }
     }
 
-    fn run_method(&mut self, impl_name: Option<(String, String)>, method: &str, args: &[Value]) -> Value {
+    fn run_method(
+        &mut self,
+        impl_name: Option<(String, String)>,
+        method: &str,
+        args: &[Value],
+    ) -> Value {
         if let Some(result) = self.run_builtin_method(impl_name.clone(), method, args) {
             return result;
         }
@@ -271,7 +282,9 @@ impl Env {
             return impl_def.lookup_method_impl(method);
         } else if let Some(value) = value {
             let (class_module_name, class_name) = self.get_class(value);
-            return self.program.lookup_anon_impl(class_module_name, class_name, method);
+            return self
+                .program
+                .lookup_anon_impl(class_module_name, class_name, method);
         }
         None
     }
@@ -355,6 +368,9 @@ impl Env {
                 let values = elements.iter().map(|e| self.eval_expr(e)).collect();
                 Value::List(values)
             }
+            Expression::SelfKeyword => self
+                .lookup_var_or_global(&VarName::SelfKeyword)
+                .expect("'self' used outside of method"),
             Expression::FieldAccess(base, field) => {
                 let base_val = self.eval_expr(base);
                 self.get_struct_member(base_val, field)
@@ -365,13 +381,19 @@ impl Env {
                 match buildable {
                     Buildable::Class(class_module, class_name) => {
                         let mut field_values =
-                            vec![Value::Null; self.get_class_field_count(&class_module, &class_name)];
+                            vec![
+                                Value::Null;
+                                self.get_class_field_count(&class_module, &class_name)
+                            ];
                         for field in fields {
                             match field.as_slice() {
                                 &[Expression::Token(ref name), ref expr] => {
                                     let value = self.eval_expr(expr);
-                                    field_values[self.get_class_field_index(&class_module, &class_name, name)] =
-                                        value;
+                                    field_values[self.get_class_field_index(
+                                        &class_module,
+                                        &class_name,
+                                        name,
+                                    )] = value;
                                     // TODO: check it's the correct type
                                 }
                                 _ => panic!("Invalid field assignment in constructor"),
@@ -467,14 +489,23 @@ impl Env {
     }
 
     fn get_class_field_count(&self, class_module: &str, class_name: &str) -> usize {
-        let cl = self.program.lookup_class(class_module, class_name).unwrap_or_else(|| panic!("No such class: {}::{}", class_module, class_name));
+        let cl = self
+            .program
+            .lookup_class(class_module, class_name)
+            .unwrap_or_else(|| panic!("No such class: {}::{}", class_module, class_name));
         cl.num_fields()
     }
 
     fn get_class_field_index(&self, class_module: &str, class_name: &str, field: &str) -> usize {
         // TODO: this assumes the first column is the one to look up. This may change with metaclasses.
-        let cl = self.program.lookup_class(class_module, class_name).expect("No such class");
-        cl.field_names().iter().position(|f| f == field).expect("Field not found")
+        let cl = self
+            .program
+            .lookup_class(class_module, class_name)
+            .expect("No such class");
+        cl.field_names()
+            .iter()
+            .position(|f| f == field)
+            .expect("Field not found")
     }
 
     fn get_struct_member(&self, structure: Value, field: &str) -> Value {
