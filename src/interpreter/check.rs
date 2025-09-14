@@ -4,7 +4,7 @@ use num_bigint::BigInt;
 
 use crate::interpreter::{
     ast::{ClassTable, Declaration, Expression, Function, Impl, ProgramFile, Trait},
-    check_expr::{CheckedExpr, CheckedFunction},
+    check_expr::CheckedFunction,
 };
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -85,7 +85,6 @@ pub enum Type {
     Trait(String, String),
     Impl(String, String),
     Literal(Value),
-    CheckedLiteral(Box<CheckedExpr>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,7 +95,7 @@ pub enum Value {
     U32(u32),
     Str(String),
     Struct(String, String, Vec<Value>),
-    Impl(String, String, Vec<TraitArg>, Box<Value>),
+    Impl(String, String, Box<Value>),
     List(Vec<Value>),
     Class(String, String),
 }
@@ -138,11 +137,6 @@ impl ArgCell {
 pub enum ClassCell {
     Name(String),
     Type(Type),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TraitArg {
-    Class(String),
 }
 
 pub struct SyntacticProgram {
@@ -509,25 +503,6 @@ impl Expression {
             _ => panic!("Expected token, got {:?}", self),
         }
     }
-
-    fn to_head_and_args(&self) -> (String, Vec<TraitArg>) {
-        match self {
-            Expression::Token(s) => (s.clone(), vec![]),
-            Expression::Subscript(head, args) => {
-                let head = head.to_name().expect_name();
-                let args = args.iter().map(|e| e[0].to_trait_arg()).collect();
-                (head, args)
-            }
-            _ => panic!("Expected head and args, got {:?}", self),
-        }
-    }
-
-    fn to_trait_arg(&self) -> TraitArg {
-        match self {
-            Expression::Token(s) => TraitArg::Class(s.clone()),
-            _ => panic!("Expected trait arg, got {:?}", self),
-        }
-    }
 }
 
 impl LoadedProgram {
@@ -593,7 +568,7 @@ impl LoadedProgram {
                     }
                     Declaration::Trait(trait_def) => {
                         let (trait_name, methods) =
-                            LoadedTrait::from_trait(&module_name, trait_def, program);
+                            LoadedTrait::from_trait(module_name, trait_def, program);
                         assert!(!decls.contains_key(&(module_name.clone(), trait_name.clone())));
                         decls.insert(
                             (module_name.clone(), trait_name),
@@ -749,7 +724,7 @@ impl LoadedProgram {
 
     pub fn lookup_type_as_class(&self, typ: &Type) -> &LoadedClass {
         if let Type::Class(module, name, args) = typ
-            && args.len() == 0
+            && args.is_empty()
         {
             self.lookup_class(module, name).expect("Class not found")
         } else {
@@ -761,7 +736,7 @@ impl LoadedProgram {
         if let Type::Impl(module, name) = typ {
             vec![self.lookup_impl(module, name).expect("Impl not found")]
         } else if let Type::Class(module, name, args) = typ
-            && args.len() == 0
+            && args.is_empty()
         {
             self.anon_impls
                 .iter()
@@ -885,42 +860,6 @@ impl LoadedProgram {
             ),
         }
     }
-
-    pub fn lookup_checked_anon_impl(
-        &self,
-        source_module: &str,
-        class_module: &str,
-        class_name: &str,
-        method: &str,
-    ) -> (String, String, &CheckedFunction) {
-        let mut candidates = vec![];
-        let superclasses = self.visible_superclasses(Some(source_module), class_module, class_name);
-        for (super_module, super_class) in &superclasses {
-            for impl_def in &self.anon_impls {
-                if impl_def.class_module != *super_module || impl_def.class_name != *super_class {
-                    continue;
-                }
-                if let Some(method_impl) = impl_def.lookup_checked_method_impl(method) {
-                    candidates.push((super_module, super_class, method_impl));
-                }
-            }
-        }
-        match candidates.len() {
-            0 => panic!(
-                "No anon impl for {}::{}::{}",
-                class_module, class_name, method
-            ),
-            1 => (
-                candidates[0].0.clone(),
-                candidates[0].1.clone(),
-                candidates[0].2,
-            ),
-            _ => panic!(
-                "Ambiguous anon impl for {}::{}::{} (candidates: {:?})",
-                class_module, class_name, method, candidates
-            ),
-        }
-    }
 }
 
 impl LoadedImpl {
@@ -928,7 +867,7 @@ impl LoadedImpl {
         let mut checked_method_impls = HashMap::new();
         for (method_name, method_impl) in &self.method_impls {
             let checked_function =
-                method_impl.check(&program, Some(current_type.clone()), &self.class_module);
+                method_impl.check(program, Some(current_type.clone()), &self.class_module);
             checked_method_impls.insert(method_name.clone(), checked_function);
         }
         self.checked_method_impls = checked_method_impls;

@@ -257,7 +257,7 @@ impl Env {
     ) -> &CheckedFunction {
         match implementing_class {
             Type::Impl(_, _) | Type::Class(_, _, _) => {
-                let impl_defs = self.program.lookup_type_as_impl(&implementing_class);
+                let impl_defs = self.program.lookup_type_as_impl(implementing_class);
                 let mut candidates = vec![];
                 for impl_def in impl_defs {
                     if let Some(m) = impl_def.lookup_checked_method_impl(method) {
@@ -290,7 +290,7 @@ impl Env {
                 self.eval_expr(expr);
             }
             CheckedStatement::Let(var, t, expr, mutable) => {
-                let value = self.eval_expr(expr);
+                let value = self.eval_expr(expr).should_be_type(t, &self.program);
                 self.create_var(VarName::Name(var.clone()), value, *mutable);
             }
             CheckedStatement::Assign(kind, lhs, rhs) => {
@@ -311,7 +311,7 @@ impl Env {
                         let new_value = match (&var.value, &value) {
                             (Value::Int(l), Value::Int(r)) => Value::Int(l + r),
                             (Value::U32(l), Value::U32(r)) => Value::U32(l + r),
-                            (Value::Str(l), Value::Str(r)) => Value::Str(l.to_owned() + &r),
+                            (Value::Str(l), Value::Str(r)) => Value::Str(l.to_owned() + r),
                             _ => panic!("Invalid types for += operator"),
                         };
                         var.value = new_value;
@@ -321,7 +321,7 @@ impl Env {
             }
             CheckedStatement::For(name, t, iterable_expr, body) => {
                 let name = VarName::Name(name.clone());
-                let iterable = self.eval_expr(&iterable_expr);
+                let iterable = self.eval_expr(iterable_expr);
                 if let Value::List(items) = iterable {
                     for item in items {
                         assert!(item.is_instance(t, &self.program));
@@ -369,14 +369,14 @@ impl Env {
             }
             CheckedExpr::BuildClass(buildable, fields) => {
                 if let Type::Class(class_module, class_name, args) = buildable
-                    && args.len() == 0
+                    && args.is_empty()
                 {
                     let mut field_values =
-                        vec![Value::Null; self.get_class_field_count(&class_module, &class_name)];
+                        vec![Value::Null; self.get_class_field_count(class_module, class_name)];
                     for (name, expr) in fields {
                         let value = self.eval_expr(expr);
-                        field_values
-                            [self.get_class_field_index(&class_module, &class_name, name)] = value;
+                        field_values[self.get_class_field_index(class_module, class_name, name)] =
+                            value;
                     }
                     Value::Struct(class_module.clone(), class_name.clone(), field_values)
                 } else {
@@ -386,7 +386,7 @@ impl Env {
             CheckedExpr::BuildImpl(buildable, value) => {
                 if let Type::Impl(module, head) = buildable {
                     let value = self.eval_expr(value);
-                    Value::Impl(module.clone(), head.clone(), vec![], Box::new(value))
+                    Value::Impl(module.clone(), head.clone(), Box::new(value))
                 } else {
                     panic!("Can only build impls this way");
                 }
@@ -423,7 +423,7 @@ impl Env {
                 self.stack.push(vars);
                 let old_module = self.current_module.clone();
                 self.current_module = f_module.clone();
-                let result = self.run(&f_name, &arg_values);
+                let result = self.run(f_name, &arg_values);
                 self.vars = self.stack.pop().expect("Stack underflow");
                 self.current_module = old_module;
                 result.should_be_type(t, &self.program)
@@ -559,7 +559,7 @@ impl Value {
                 program.is_subclass(&my_module, &my_class, class_module, class_name)
             }
             Type::Impl(module, head) => {
-                if let Value::Impl(impl_module, impl_head, _, _) = self {
+                if let Value::Impl(impl_module, impl_head, _) = self {
                     module == impl_module && head == impl_head
                 } else {
                     false

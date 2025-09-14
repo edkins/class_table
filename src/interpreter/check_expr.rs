@@ -227,7 +227,7 @@ impl Expression {
                 )
             }
             Expression::Build(cl, fields) => {
-                let buildable = Type::new(&**cl, &ctx.current_module, ctx.program);
+                let buildable = Type::new(cl, &ctx.current_module, ctx.program);
                 match &buildable {
                     Type::Class(cl_module, cl_name, cl_args) => {
                         assert!(
@@ -248,7 +248,7 @@ impl Expression {
 
                         let loaded_cl = ctx
                             .program
-                            .lookup_class(&cl_module, &cl_name)
+                            .lookup_class(cl_module, cl_name)
                             .expect("No such class");
                         assert!(
                             loaded_cl.body.len() == field_values.len(),
@@ -265,7 +265,7 @@ impl Expression {
                                 .expect("Field missing from builder")
                                 .typ();
                             assert!(
-                                supplied_type.is_subtype_of(&field_type, &ctx.program),
+                                supplied_type.is_subtype_of(&field_type, ctx.program),
                                 "Field type mismatch in build expression for field {:?}: supplied {:?} vs expected {:?}",
                                 field_name,
                                 supplied_type,
@@ -279,7 +279,7 @@ impl Expression {
                         assert!(fields.len() == 1 && fields[0].len() == 1);
                         let value = fields[0][0].check(ctx.clone(), env);
                         assert!(
-                            value.typ().is_subtype_of(&buildable, &ctx.program),
+                            value.typ().is_subtype_of(&buildable, ctx.program),
                             "Impl build expression type mismatch {:?} vs {:?}",
                             value.typ(),
                             buildable
@@ -400,7 +400,7 @@ impl LoadedProgram {
     pub fn lookup_field(&self, base: &Type, field_name: &str) -> Type {
         let cl = self.lookup_type_as_class(base);
         for row in &cl.body {
-            if row[0].unwrap_name() == field_name.to_owned() {
+            if row[0].unwrap_name() == field_name {
                 return row[1].unwrap_type();
             }
         }
@@ -525,10 +525,12 @@ impl Type {
     }
 
     pub fn least_common_iterable_type(&self, _program: &LoadedProgram) -> Type {
-        if let Type::Class(module, name, args) = self {
-            if name == "list" && args.len() == 1 {
-                return args[0].clone();
-            }
+        if let Type::Class(module, name, args) = self
+            && module == "std"
+            && name == "list"
+            && args.len() == 1
+        {
+            return args[0].clone();
         }
         panic!("Type is not an iterable: {:?}", self);
     }
