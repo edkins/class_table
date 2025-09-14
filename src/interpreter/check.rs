@@ -42,7 +42,13 @@ pub struct LoadedTrait {
 
 #[derive(Clone, Debug)]
 pub struct LoadedClass {
-    body: Vec<Vec<ClassCell>>,
+    pub body: Vec<Vec<ClassCell>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct LoadedFunctionSignature {
+    pub params: Vec<ArgCell>,
+    pub ret: Type,
 }
 
 #[derive(Clone, Debug)]
@@ -134,7 +140,7 @@ const BUILTIN_GENERIC_CLASSES: &[&str] = &["list"];
 const BUILTIN_TRAITS: &[&str] = &["struct"];
 
 impl Type {
-    fn new(expr: &Expression, program: &SyntacticProgram) -> Self {
+    pub fn new(expr: &Expression, program: &SyntacticProgram) -> Self {
         match expr {
             Expression::Token(s) => program.lookup_class(s),
             Expression::Subscript(head, args) => {
@@ -151,6 +157,16 @@ impl Type {
             Expression::Str(s) => Type::Literal(Expression::Str(s.clone())),
             _ => panic!("Invalid type expression: {:?}", expr),
         }
+    }
+
+    pub fn is_subtype_of(&self, other: &Type, program: &SyntacticProgram) -> bool {
+        if self == other {
+            return true;
+        }
+        if other == &Type::Class("introspect".to_owned(), "examine_struct".to_owned(), vec![]) {
+            return true;   // TODO: is this correct?
+        }
+        false
     }
 }
 
@@ -340,6 +356,34 @@ impl SyntacticProgram {
             ),
         }
     }
+
+    pub fn lookup_field(&self, base: &Type, field_name: &str) -> Type {
+        xxxx
+    }
+
+    pub fn load_method_signature(
+        &self,
+        base: &Type,
+        method_name: &str,
+    ) -> (Type, LoadedFunctionSignature) {
+        xxxx
+    }
+
+    pub fn load_function_signature(
+        &self,
+        module_name: &str,
+        function_name: &str,
+    ) -> LoadedFunctionSignature {
+        xxxx
+    }
+
+    pub fn load_class(
+        &self,
+        module_name: &str,
+        class_name: &str,
+    ) -> LoadedClass {
+        xxxx
+    }
 }
 
 impl ClassCell {
@@ -348,6 +392,20 @@ impl ClassCell {
             (ColumnSchema::Name, Expression::Token(s)) => Self::Name(s.clone()),
             (ColumnSchema::Type, type_expr) => Self::Type(Type::new(type_expr, program)),
             _ => panic!("Invalid class cell expression: {:?}", expr),
+        }
+    }
+
+    pub fn unwrap_name(&self) -> String {
+        match self {
+            ClassCell::Name(s) => s.clone(),
+            _ => panic!("Expected Name cell, got {:?}", self),
+        }
+    }
+
+    pub fn unwrap_type(&self) -> Type {
+        match self {
+            ClassCell::Type(t) => t.clone(),
+            _ => panic!("Expected Type cell, got {:?}", self),
         }
     }
 }
