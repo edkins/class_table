@@ -48,6 +48,7 @@ pub struct LoadedClass {
 #[derive(Clone, Debug)]
 pub struct LoadedFunction {
     pub params: Vec<ArgCell>,
+    pub ret: Type,
     pub body: Expression,
 }
 
@@ -59,25 +60,42 @@ pub struct LoadedProgram {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ArgCell {
-    SelfKeyword,
-    Arg(String, Buildable),
+    Arg(VarName, Type),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Type {
+    Class(String, String, Vec<Type>),
+    Trait(String, String),
 }
 
 impl ArgCell {
     pub fn name(&self) -> VarName {
         match self {
-            ArgCell::SelfKeyword => VarName::SelfKeyword,
-            ArgCell::Arg(name, _) => VarName::Name(name.clone()),
+            ArgCell::Arg(name, _) => name.clone(),
         }
     }
 
-    fn new(expr: &[Expression], program: &SyntacticProgram) -> Self {
+    pub fn get_type(&self) -> &Type {
+        match self {
+            ArgCell::Arg(_, b) => b,
+        }
+    }
+
+    fn new(
+        expr: &[Expression],
+        surrounding_class: Option<&Type>,
+        program: &SyntacticProgram,
+    ) -> Self {
         match expr {
             [Expression::Token(s), typ] => {
-                let buildable = Buildable::new(typ, program);
-                ArgCell::Arg(s.clone(), buildable)
+                let buildable = Type::new(typ, program);
+                ArgCell::Arg(VarName::Name(s.clone()), buildable)
             }
-            [Expression::SelfKeyword] => ArgCell::SelfKeyword,
+            [Expression::SelfKeyword] => ArgCell::Arg(
+                VarName::SelfKeyword,
+                surrounding_class.expect("self used outside class").clone(),
+            ),
             _ => panic!("Invalid argument expression: {:?}", expr),
         }
     }
@@ -112,22 +130,27 @@ enum ColumnSchema {
 const BUILTIN_CLASSES: &[&str] = &["null", "u32", "int", "str", "bool"];
 const BUILTIN_TRAITS: &[&str] = &["struct"];
 
-impl Buildable {
+impl Type {
     fn new(expr: &Expression, program: &SyntacticProgram) -> Self {
         match expr {
-            Expression::Token(s) => {
-                let (module_name, class) = program.lookup_class(s);
-                Buildable::Class(module_name, class)
-            }
+            Expression::Token(s) => program.lookup_class(s),
             Expression::Subscript(head, args) => {
-                let head = head.to_name().expect_name();
-                let args = args.iter().map(|e| e[0].to_trait_arg()).collect();
-                if BUILTIN_TRAITS.contains(&(&head as &str)) {
-                    Buildable::Impl("std".to_owned(), head, args)
-                } else {
-                    let (module_name, _) = program.lookup_class(&head);
-                    Buildable::Impl(module_name, head, args)
+                if **head == Expression::Token("list".to_owned()) {
+                    if args.len() != 1 || args[0].len() != 1 {
+                        panic!("List type must have one type argument");
+                    }
+                    let elem_type = Type::new(&args[0][0], program);
+                    return Type::Class("std".to_owned(), "list".to_owned(), vec![elem_type]);
                 }
+                unimplemented!("Generic types not supported yet");
+                // let head = head.to_name().expect_name();
+                // let args = args.iter().map(|e| e[0].to_trait_arg()).collect();
+                // if BUILTIN_TRAITS.contains(&(&head as &str)) {
+                //     Type::Trait("std".to_owned(), heads)
+                // } else {
+                //     let (module_name, _) = program.lookup_class(&head);
+                //     Type::Trait(module_name, head)
+                // }
             }
             _ => panic!("Invalid buildable expression: {:?}", expr),
         }
@@ -146,14 +169,7 @@ impl LoadedImpl {
             Expression::Empty => None,
             _ => panic!("Invalid impl header: {:?}", impl_def.header),
         };
-        let mut method_impls = HashMap::new();
-        for method in &impl_def.methods {
-            let (method_name, loaded_function) = LoadedFunction::from_fn(method, program);
-            assert!(!method_impls.contains_key(&method_name));
-            method_impls.insert(method_name, loaded_function);
-        }
-        let (class_module, class_name) =
-            program.lookup_class(&impl_def.header[0].to_name().expect_name());
+
         let trait_name = match &impl_def.header[2] {
             Expression::Token(s) => {
                 if BUILTIN_TRAITS.contains(&(s as &str)) {
@@ -165,6 +181,23 @@ impl LoadedImpl {
             Expression::Empty => None,
             _ => panic!("Invalid impl header: {:?}", impl_def.header),
         };
+
+        let self_type = program.lookup_class(&impl_def.header[0].to_name().expect_name());
+        let (class_module, class_name, _) = match &self_type {
+            Type::Class(m, c, a) if a.is_empty() => (m.clone(), c.clone(), a.clone()),
+            _ => panic!(
+                "Impl self type must be a non-generic class: {:?}",
+                self_type
+            ),
+        };
+
+        let mut method_impls = HashMap::new();
+        for method in &impl_def.methods {
+            let (method_name, loaded_function) =
+                LoadedFunction::from_fn(method, Some(&self_type), program);
+            assert!(!method_impls.contains_key(&method_name));
+            method_impls.insert(method_name, loaded_function);
+        }
         (
             impl_name,
             LoadedImpl {
@@ -175,10 +208,18 @@ impl LoadedImpl {
             },
         )
     }
+
+    pub fn lookup_method_impl(&self, name: &str) -> Option<&LoadedFunction> {
+        self.method_impls.get(name)
+    }
 }
 
 impl LoadedTrait {
-    fn from_trait(trait_def: &Trait, _program: &SyntacticProgram) -> (String, Self) {
+    fn from_trait(
+        trait_module: &str,
+        trait_def: &Trait,
+        program: &SyntacticProgram,
+    ) -> (String, Self) {
         assert!(trait_def.header.len() == 1);
         let trait_name = match &trait_def.header[0] {
             Expression::Token(s) => s.clone(),
@@ -186,7 +227,9 @@ impl LoadedTrait {
         };
         let mut methods = HashMap::new();
         for method in &trait_def.methods {
-            let (method_name, loaded_function) = LoadedFunction::from_fn(method, _program);
+            let typ = Type::Trait(trait_module.to_owned(), trait_name.clone());
+            let (method_name, loaded_function) =
+                LoadedFunction::from_fn(method, Some(&typ), program);
             assert!(!methods.contains_key(&method_name));
             methods.insert(method_name, loaded_function);
         }
@@ -224,14 +267,12 @@ impl LoadedDecl {
     }
 }
 
-impl LoadedImpl {
-    pub fn lookup_method_impl(&self, name: &str) -> Option<&LoadedFunction> {
-        self.method_impls.get(name)
-    }
-}
-
 impl LoadedFunction {
-    fn from_fn(func: &Function, program: &SyntacticProgram) -> (String, Self) {
+    fn from_fn(
+        func: &Function,
+        surrounding_class: Option<&Type>,
+        program: &SyntacticProgram,
+    ) -> (String, Self) {
         assert!(func.header.len() == 1);
         let function_name = match &func.header[0] {
             Expression::Token(s) => s.clone(),
@@ -239,11 +280,13 @@ impl LoadedFunction {
         };
         let mut params = Vec::new();
         for param in &func.params {
-            let arg = ArgCell::new(param, program);
+            let arg = ArgCell::new(param, surrounding_class.as_ref().cloned(), program);
             params.push(arg);
         }
+        assert!(func.ret.len() == 1);
         let loaded_function = LoadedFunction {
             params,
+            ret: Type::new(&func.ret[0], program),
             body: func.body.clone(),
         };
         (function_name, loaded_function)
@@ -258,9 +301,15 @@ impl LoadedFunction {
         }
         for (p1, p2) in self.params.iter().zip(&other.params) {
             match (p1, p2) {
-                (ArgCell::SelfKeyword, ArgCell::SelfKeyword) => {}
-                (ArgCell::Arg(_, b1), ArgCell::Arg(_, b2)) if b1 == b2 => {}
-                _ => return false,
+                (ArgCell::Arg(name1, b1), ArgCell::Arg(name2, b2)) => {
+                    if name1 != name2 {
+                        return false;
+                    }
+                    // TODO: type checking for self
+                    if name1 != &VarName::SelfKeyword && b1 != b2 {
+                        return false;
+                    }
+                }
             }
         }
         true
@@ -268,17 +317,17 @@ impl LoadedFunction {
 }
 
 impl SyntacticProgram {
-    fn lookup_class(&self, name: &str) -> (String, String) {
+    fn lookup_class(&self, name: &str) -> Type {
         let mut candidates = vec![];
         if BUILTIN_CLASSES.contains(&name) {
-            candidates.push(("std".to_owned(), name.to_owned()));
+            candidates.push(Type::Class("std".to_owned(), name.to_owned(), vec![]));
         }
         for (module_name, module) in &self.modules {
             for decl in &module.declarations {
                 if let Declaration::Class(class) = decl
                     && class.header[0] == Expression::Token(name.to_owned())
                 {
-                    candidates.push((module_name.clone(), name.to_owned()));
+                    candidates.push(Type::Class(module_name.clone(), name.to_owned(), vec![]));
                 }
             }
         }
@@ -297,10 +346,13 @@ impl ClassCell {
     fn new(expr: &Expression, schema: &ColumnSchema, program: &SyntacticProgram) -> Self {
         match (schema, expr) {
             (ColumnSchema::Name, Expression::Token(s)) => Self::Name(s.clone()),
-            (ColumnSchema::Type, Expression::Token(s)) => {
-                let (module_name, class) = program.lookup_class(s);
-                Self::Class(module_name, class)
-            }
+            (ColumnSchema::Type, Expression::Token(s)) => match program.lookup_class(s) {
+                Type::Class(module_name, class, args) => {
+                    assert!(args.is_empty());
+                    Self::Class(module_name, class)
+                }
+                _ => panic!("Expected class type, got {:?}", s),
+            },
             _ => panic!("Invalid class cell expression: {:?}", expr),
         }
     }
@@ -403,7 +455,15 @@ impl LoadedProgram {
             method_impls: HashMap::from([(
                 "field_names".to_owned(),
                 LoadedFunction {
-                    params: vec![ArgCell::SelfKeyword],
+                    params: vec![ArgCell::Arg(
+                        VarName::SelfKeyword,
+                        Type::Class("introspect".to_owned(), "examine_struct".to_owned(), vec![]),
+                    )],
+                    ret: Type::Class(
+                        "std".to_owned(),
+                        "list".to_owned(),
+                        vec![Type::Class("std".to_owned(), "str".to_owned(), vec![])],
+                    ),
                     body: Expression::Builtin,
                 },
             )]),
@@ -423,7 +483,7 @@ impl LoadedProgram {
                     }
                     Declaration::Fn(func) => {
                         let (function_name, loaded_function) =
-                            LoadedFunction::from_fn(func, program);
+                            LoadedFunction::from_fn(func, None, program);
                         assert!(!decls.contains_key(&(module_name.clone(), function_name.clone())));
                         decls.insert(
                             (module_name.clone(), function_name),
@@ -431,7 +491,8 @@ impl LoadedProgram {
                         );
                     }
                     Declaration::Trait(trait_def) => {
-                        let (trait_name, methods) = LoadedTrait::from_trait(trait_def, program);
+                        let (trait_name, methods) =
+                            LoadedTrait::from_trait(&module_name, trait_def, program);
                         assert!(!decls.contains_key(&(module_name.clone(), trait_name.clone())));
                         decls.insert(
                             (module_name.clone(), trait_name),
@@ -553,14 +614,31 @@ impl LoadedProgram {
             .and_then(LoadedDecl::as_opt_trait)
     }
 
-    fn visible_superclasses(
+    pub fn is_subclass(
         &self,
-        source_module: &str,
+        subclass_module: &str,
+        subclass_name: &str,
+        superclass_module: &str,
+        superclass_name: &str,
+    ) -> bool {
+        if subclass_module == superclass_module && subclass_name == superclass_name {
+            return true;
+        }
+        self.visible_superclasses(None, subclass_module, subclass_name)
+            .contains(&(superclass_module.to_owned(), superclass_name.to_owned()))
+    }
+
+    pub fn visible_superclasses(
+        &self,
+        source_module: Option<&str>,
         class_module: &str,
         class_name: &str,
     ) -> Vec<(String, String)> {
         // everything is a superclass of itself
-        assert!(self.can_see(source_module, class_module, class_name));
+        assert!(
+            source_module.is_none()
+                || self.can_see(source_module.unwrap(), class_module, class_name)
+        );
         let mut result = vec![(class_module.to_owned(), class_name.to_owned())];
 
         if let Some(class) = self.lookup_class(class_module, class_name)
@@ -568,7 +646,9 @@ impl LoadedProgram {
         {
             // If it's declared then it's a struct
             // If it's a struct then it's an examine_struct
-            if self.can_see(source_module, "introspect", "examine_struct") {
+            if source_module.is_none()
+                || self.can_see(source_module.unwrap(), "introspect", "examine_struct")
+            {
                 result.push(("introspect".to_owned(), "examine_struct".to_owned()));
             }
         }
@@ -600,7 +680,7 @@ impl LoadedProgram {
     ) -> &LoadedFunction {
         let mut candidate_names = vec![];
         let mut candidates = vec![];
-        let superclasses = self.visible_superclasses(source_module, class_module, class_name);
+        let superclasses = self.visible_superclasses(Some(source_module), class_module, class_name);
         for (super_module, super_class) in superclasses {
             for impl_def in &self.anon_impls {
                 if impl_def.class_module != super_module || impl_def.class_name != super_class {

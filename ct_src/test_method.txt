@@ -4,7 +4,7 @@ class Foo {
 }
 
 impl Foo:: {
-    fn sum(self) -> str {
+    fn sum(self) -> u32 {
         self.a + self.b
     }
 }

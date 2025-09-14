@@ -6,7 +6,7 @@ use num_traits::ToPrimitive;
 
 use crate::interpreter::{
     ast::{Expression, ProgramFile, Statement},
-    check::{Buildable, LoadedFunction, LoadedProgram, SyntacticProgram, TraitArg, VarName},
+    check::{Buildable, LoadedFunction, LoadedProgram, SyntacticProgram, TraitArg, Type, VarName},
 };
 
 pub struct Env {
@@ -35,11 +35,19 @@ pub enum Value {
 }
 
 impl LoadedFunction {
-    fn check_args(&self, args: &[Value]) {
+    fn check_args(&self, args: &[Value], program: &LoadedProgram) {
         if args.len() != self.params.len() {
             panic!("Argument count mismatch");
         }
-        // TODO: type checking
+        for (arg, param) in args.iter().zip(&self.params) {
+            if !arg.is_instance(param.get_type(), program) {
+                panic!(
+                    "Argument type mismatch: expected {:?}, got {:?}",
+                    param.get_type(),
+                    arg
+                );
+            }
+        }
     }
 }
 
@@ -186,7 +194,7 @@ impl Env {
         let method_impl = self
             .lookup_method_impl(impl_name.clone(), args.first(), method)
             .clone();
-        method_impl.check_args(args);
+        method_impl.check_args(args, &self.program);
         for (arg, param) in args.iter().zip(&method_impl.params) {
             let name = param.name();
             self.create_var(name, arg.clone(), false);
@@ -196,8 +204,14 @@ impl Env {
             return self.run_builtin_method(method, args);
         }
 
-        // TODO: type-check result
-        self.eval_expr(&method_impl.body)
+        let result = self.eval_expr(&method_impl.body);
+        assert!(
+            result.is_instance(&method_impl.ret, &self.program),
+            "Method return type mismatch: expected {:?}, got {:?}",
+            method_impl.ret,
+            result
+        );
+        result
     }
 
     pub fn run(&mut self, func: &str, args: &[Value]) -> Value {
@@ -211,7 +225,7 @@ impl Env {
             .lookup_fn(&self.current_module, func)
             .unwrap_or_else(|| panic!("Function not found: {}", func))
             .clone();
-        function.check_args(args);
+        function.check_args(args, &self.program);
         for (arg, param) in args.iter().zip(&function.params) {
             let name = param.name();
             self.create_var(name, arg.clone(), false);
@@ -268,7 +282,7 @@ impl Env {
                 )
             })
         } else if let Some(value) = value {
-            let (class_module_name, class_name) = self.get_class(value);
+            let (class_module_name, class_name) = value.get_class();
             self.program.lookup_anon_impl(
                 &self.current_module,
                 &class_module_name,
@@ -466,18 +480,6 @@ impl Env {
         }
     }
 
-    fn get_class(&self, value: &Value) -> (String, String) {
-        match value {
-            Value::Null => ("std".to_owned(), "null".to_owned()),
-            Value::Bool(_) => ("std".to_owned(), "bool".to_owned()),
-            Value::Int(_) => ("std".to_owned(), "int".to_owned()),
-            Value::U32(_) => ("std".to_owned(), "u32".to_owned()),
-            Value::Str(_) => ("std".to_owned(), "str".to_owned()),
-            Value::Struct(module_name, class_name, _) => (module_name.clone(), class_name.clone()),
-            _ => panic!("Unable to get class of {:?}", value),
-        }
-    }
-
     fn get_class_field_count(&self, class_module: &str, class_name: &str) -> usize {
         let cl = self
             .program
@@ -535,4 +537,39 @@ impl Env {
     //     }
     //     result
     // }
+}
+
+impl Value {
+    fn get_class(&self) -> (String, String) {
+        match self {
+            Value::Null => ("std".to_owned(), "null".to_owned()),
+            Value::Bool(_) => ("std".to_owned(), "bool".to_owned()),
+            Value::Int(_) => ("std".to_owned(), "int".to_owned()),
+            Value::U32(_) => ("std".to_owned(), "u32".to_owned()),
+            Value::Str(_) => ("std".to_owned(), "str".to_owned()),
+            Value::Struct(module_name, class_name, _) => (module_name.clone(), class_name.clone()),
+            _ => panic!("Unable to get class of {:?}", self),
+        }
+    }
+
+    fn is_instance(&self, typ: &Type, program: &LoadedProgram) -> bool {
+        match typ {
+            Type::Class(class_module, class_name, args) => {
+                if class_module == "std" && class_name == "list" {
+                    if args.len() != 1 {
+                        panic!("List type must have one type argument");
+                    }
+                    if let Value::List(elements) = self {
+                        return elements.iter().all(|e| e.is_instance(&args[0], program));
+                    } else {
+                        return false;
+                    }
+                }
+                assert!(args.is_empty(), "Generic types not supported yet");
+                let (my_module, my_class) = self.get_class();
+                program.is_subclass(&my_module, &my_class, class_module, class_name)
+            }
+            _ => unimplemented!("Unimplemented type check for {:?}", typ),
+        }
+    }
 }
