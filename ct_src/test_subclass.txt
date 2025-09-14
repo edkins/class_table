@@ -1,0 +1,19 @@
+class MySuper {
+    a : str,
+    b : str,
+}
+
+class MySub : MySuper {
+    a : "hello",
+    b : str,
+}
+
+fn main(input: str) -> str {
+    let x = MySub {
+        a : "hello",
+        b : "goodbye",
+    };
+    assert(x.a == "hello");
+    assert(x.b == "goodbye");
+    "ok"
+}

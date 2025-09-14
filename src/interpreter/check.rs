@@ -66,7 +66,9 @@ pub enum ArgCell {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Type {
     Class(String, String, Vec<Type>),
+    GenericClass(String, String),
     Trait(String, String),
+    Literal(Expression),
 }
 
 impl ArgCell {
@@ -104,7 +106,7 @@ impl ArgCell {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ClassCell {
     Name(String),
-    Class(String, String),
+    Type(Type),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +130,7 @@ enum ColumnSchema {
 }
 
 const BUILTIN_CLASSES: &[&str] = &["null", "u32", "int", "str", "bool"];
+const BUILTIN_GENERIC_CLASSES: &[&str] = &["list"];
 const BUILTIN_TRAITS: &[&str] = &["struct"];
 
 impl Type {
@@ -135,24 +138,18 @@ impl Type {
         match expr {
             Expression::Token(s) => program.lookup_class(s),
             Expression::Subscript(head, args) => {
-                if **head == Expression::Token("list".to_owned()) {
-                    if args.len() != 1 || args[0].len() != 1 {
-                        panic!("List type must have one type argument");
+                let t = Type::new(head, program);
+                match t {
+                    Type::GenericClass(module, name) => {
+                        assert!(!args.is_empty(), "Generic class must have type arguments");
+                        let arg_types = args.iter().map(|e| Type::new(&e[0], program)).collect();
+                        Type::Class(module, name, arg_types)
                     }
-                    let elem_type = Type::new(&args[0][0], program);
-                    return Type::Class("std".to_owned(), "list".to_owned(), vec![elem_type]);
+                    _ => panic!("Type is not a generic class: {:?}", t),
                 }
-                unimplemented!("Generic types not supported yet");
-                // let head = head.to_name().expect_name();
-                // let args = args.iter().map(|e| e[0].to_trait_arg()).collect();
-                // if BUILTIN_TRAITS.contains(&(&head as &str)) {
-                //     Type::Trait("std".to_owned(), heads)
-                // } else {
-                //     let (module_name, _) = program.lookup_class(&head);
-                //     Type::Trait(module_name, head)
-                // }
             }
-            _ => panic!("Invalid buildable expression: {:?}", expr),
+            Expression::Str(s) => Type::Literal(Expression::Str(s.clone())),
+            _ => panic!("Invalid type expression: {:?}", expr),
         }
     }
 }
@@ -322,6 +319,9 @@ impl SyntacticProgram {
         if BUILTIN_CLASSES.contains(&name) {
             candidates.push(Type::Class("std".to_owned(), name.to_owned(), vec![]));
         }
+        if BUILTIN_GENERIC_CLASSES.contains(&name) {
+            candidates.push(Type::GenericClass("std".to_owned(), name.to_owned()));
+        }
         for (module_name, module) in &self.modules {
             for decl in &module.declarations {
                 if let Declaration::Class(class) = decl
@@ -346,13 +346,7 @@ impl ClassCell {
     fn new(expr: &Expression, schema: &ColumnSchema, program: &SyntacticProgram) -> Self {
         match (schema, expr) {
             (ColumnSchema::Name, Expression::Token(s)) => Self::Name(s.clone()),
-            (ColumnSchema::Type, Expression::Token(s)) => match program.lookup_class(s) {
-                Type::Class(module_name, class, args) => {
-                    assert!(args.is_empty());
-                    Self::Class(module_name, class)
-                }
-                _ => panic!("Expected class type, got {:?}", s),
-            },
+            (ColumnSchema::Type, type_expr) => Self::Type(Type::new(type_expr, program)),
             _ => panic!("Invalid class cell expression: {:?}", expr),
         }
     }
