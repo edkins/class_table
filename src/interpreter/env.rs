@@ -283,12 +283,14 @@ impl Env {
             })
         } else if let Some(value) = value {
             let (class_module_name, class_name) = value.get_class();
-            self.program.lookup_anon_impl(
-                &self.current_module,
-                &class_module_name,
-                &class_name,
-                method,
-            )
+            self.program
+                .lookup_anon_impl(
+                    &self.current_module,
+                    &class_module_name,
+                    &class_name,
+                    method,
+                )
+                .2
         } else {
             panic!("Cannot lookup method {} without impl or value", method);
         }
