@@ -31,6 +31,7 @@ enum Word {
     Trait,
     SelfKeyword,
     Use,
+    Builtin,
     Token(String),
     Integer(BigInt),
     U32(u32),
@@ -186,6 +187,7 @@ fn unquoted_word(input: &str) -> IResult<&str, Word> {
         "trait" => Ok((input, Word::Trait)),
         "self" => Ok((input, Word::SelfKeyword)),
         "use" => Ok((input, Word::Use)),
+        "builtin" => Ok((input, Word::Builtin)),
         _ => {
             if t.chars().next().unwrap().is_ascii_digit() {
                 if let Some(n) = parse_number(t) {
@@ -250,6 +252,7 @@ fn expression_word(input: &str) -> IResult<&str, Expression> {
         Word::True => Ok((input, Expression::Bool(true))),
         Word::False => Ok((input, Expression::Bool(false))),
         Word::SelfKeyword => Ok((input, Expression::SelfKeyword)),
+        Word::Builtin => Ok((input, Expression::Builtin)),
         _ => Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Tag,
@@ -404,7 +407,7 @@ impl BinopSuffix {
         match &self.binop as &str {
             "&&" => Expression::And(Box::new(lhs), Box::new(self.rhs)),
             "||" => Expression::Or(Box::new(lhs), Box::new(self.rhs)),
-            _ => Expression::Call(Box::new(Expression::Token(self.binop)), vec![lhs, self.rhs]),
+            _ => Expression::MethodCall(Box::new(lhs), self.binop, vec![self.rhs]),
         }
     }
 
@@ -740,6 +743,10 @@ fn expr_block(input: &str) -> IResult<&str, Expression> {
         Expression::Empty
     };
     let (input, _) = close_brace.parse(input)?;
+    if stmts.is_empty() && expr == Expression::Builtin {
+        // Special case: don't wrap a single Builtin in a block
+        return Ok((input, Expression::Builtin));
+    }
     Ok((input, Expression::Block(stmts, Box::new(expr))))
 }
 
@@ -1632,12 +1639,10 @@ mod test {
         let result = all_consuming(expression).parse(input);
         assert!(
             result.unwrap().1
-                == Expression::Call(
-                    Box::new(Expression::Token("==".to_owned())),
-                    vec![
-                        Expression::Token("x".to_owned()),
-                        Expression::Token("y".to_owned())
-                    ]
+                == Expression::MethodCall(
+                    Box::new(Expression::Token("x".to_owned())),
+                    "==".to_owned(),
+                    vec![Expression::Token("y".to_owned())]
                 )
         );
     }
@@ -1648,12 +1653,10 @@ mod test {
         let result = all_consuming(expression).parse(input);
         assert!(
             result.unwrap().1
-                == Expression::Call(
-                    Box::new(Expression::Token("!=".to_owned())),
-                    vec![
-                        Expression::Token("x".to_owned()),
-                        Expression::Token("y".to_owned())
-                    ]
+                == Expression::MethodCall(
+                    Box::new(Expression::Token("x".to_owned())),
+                    "!=".to_owned(),
+                    vec![Expression::Token("y".to_owned())]
                 )
         );
     }
@@ -1664,12 +1667,10 @@ mod test {
         let result = all_consuming(expression).parse(input);
         assert!(
             result.unwrap().1
-                == Expression::Call(
-                    Box::new(Expression::Token("<".to_owned())),
-                    vec![
-                        Expression::Token("x".to_owned()),
-                        Expression::Token("y".to_owned())
-                    ]
+                == Expression::MethodCall(
+                    Box::new(Expression::Token("x".to_owned())),
+                    "<".to_owned(),
+                    vec![Expression::Token("y".to_owned())]
                 )
         );
     }
@@ -1680,12 +1681,10 @@ mod test {
         let result = all_consuming(expression).parse(input);
         assert!(
             result.unwrap().1
-                == Expression::Call(
-                    Box::new(Expression::Token(">".to_owned())),
-                    vec![
-                        Expression::Token("x".to_owned()),
-                        Expression::Token("y".to_owned())
-                    ]
+                == Expression::MethodCall(
+                    Box::new(Expression::Token("x".to_owned())),
+                    ">".to_owned(),
+                    vec![Expression::Token("y".to_owned())]
                 )
         );
     }
@@ -1724,35 +1723,27 @@ mod test {
             result.unwrap().1
                 == Expression::Or(
                     Box::new(Expression::And(
-                        Box::new(Expression::Call(
-                            Box::new(Expression::Token("<".to_owned())),
-                            vec![
-                                Expression::Token("a".to_owned()),
-                                Expression::Token("b".to_owned())
-                            ]
+                        Box::new(Expression::MethodCall(
+                            Box::new(Expression::Token("a".to_owned())),
+                            "<".to_owned(),
+                            vec![Expression::Token("b".to_owned())]
                         )),
-                        Box::new(Expression::Call(
-                            Box::new(Expression::Token("==".to_owned())),
-                            vec![
-                                Expression::Token("c".to_owned()),
-                                Expression::Token("d".to_owned())
-                            ]
+                        Box::new(Expression::MethodCall(
+                            Box::new(Expression::Token("c".to_owned())),
+                            "==".to_owned(),
+                            vec![Expression::Token("d".to_owned())]
                         ))
                     )),
                     Box::new(Expression::And(
-                        Box::new(Expression::Call(
-                            Box::new(Expression::Token("==".to_owned())),
-                            vec![
-                                Expression::Token("e".to_owned()),
-                                Expression::Token("f".to_owned())
-                            ]
+                        Box::new(Expression::MethodCall(
+                            Box::new(Expression::Token("e".to_owned())),
+                            "==".to_owned(),
+                            vec![Expression::Token("f".to_owned())]
                         )),
-                        Box::new(Expression::Call(
-                            Box::new(Expression::Token("!=".to_owned())),
-                            vec![
-                                Expression::Token("g".to_owned()),
-                                Expression::Token("h".to_owned())
-                            ]
+                        Box::new(Expression::MethodCall(
+                            Box::new(Expression::Token("g".to_owned())),
+                            "!=".to_owned(),
+                            vec![Expression::Token("h".to_owned())]
                         ))
                     ))
                 )
@@ -1765,12 +1756,10 @@ mod test {
         let result = all_consuming(expression).parse(input);
         assert!(
             result.unwrap().1
-                == Expression::Call(
-                    Box::new(Expression::Token("+".to_owned())),
-                    vec![
-                        Expression::Token("x".to_owned()),
-                        Expression::Token("y".to_owned())
-                    ]
+                == Expression::MethodCall(
+                    Box::new(Expression::Token("x".to_owned())),
+                    "+".to_owned(),
+                    vec![Expression::Token("y".to_owned())]
                 )
         );
     }
@@ -2030,5 +2019,27 @@ mod test {
         let input = "use a.b;";
         let result = all_consuming(declaration).parse(input);
         assert!(result.unwrap().1 == Declaration::Use("a".to_owned(), "b".to_owned()));
+    }
+
+    #[test]
+    fn builtin() {
+        let input = "builtin";
+        let result = all_consuming(expression).parse(input);
+        assert!(result.unwrap().1 == Expression::Builtin);
+    }
+
+    #[test]
+    fn builtin_fn() {
+        let input = "fn foo() -> str { builtin }";
+        let result = all_consuming(function).parse(input);
+        assert!(
+            result.unwrap().1
+                == Function {
+                    header: vec![Expression::Token("foo".to_owned())],
+                    params: vec![],
+                    ret: vec![Expression::Token("str".to_owned())],
+                    body: Expression::Builtin,
+                }
+        );
     }
 }

@@ -15,8 +15,8 @@ impl Foo :: struct_str {
 
 fn main(input: str) -> str {
     let x = Foo {
-        a : 1,
-        b : 2,
+        a : "avalue",
+        b : "bvalue",
     };
     let mut result = "";
     for name : x.field_names() {

@@ -2,10 +2,7 @@ use std::fs;
 
 use clap::Parser;
 
-use crate::interpreter::{
-    env::{Env, Value},
-    parse,
-};
+use crate::interpreter::{ast::ProgramFile, check::Value, env::Env, parse};
 
 mod interpreter;
 
@@ -41,6 +38,19 @@ fn run_tests() {
 }
 
 fn run_program(program_name: &str, input_text: &str) -> String {
+    let (filename_base, program) = parse_program(program_name);
+    let (std_base, std_program) = parse_program("ct_src/std.txt");
+    let mut env = Env::new(
+        &[(std_base, std_program), (filename_base.clone(), program)],
+        &filename_base,
+    );
+    match env.run("main", &[Value::Str(input_text.to_string())]) {
+        Value::Str(output) => output,
+        result => panic!("Unexpected return type {:?}", result),
+    }
+}
+
+fn parse_program(program_name: &str) -> (String, ProgramFile) {
     let text = fs::read_to_string(program_name).expect("Failed to read program file");
     let program = parse::parse(&text);
     let filename_base = program_name
@@ -50,11 +60,7 @@ fn run_program(program_name: &str, input_text: &str) -> String {
         .split('.')
         .next()
         .unwrap();
-    let mut env = Env::new(filename_base, program);
-    match env.run("main", &[Value::Str(input_text.to_string())]) {
-        Value::Str(output) => output,
-        result => panic!("Unexpected return type {:?}", result),
-    }
+    (filename_base.to_owned(), program)
 }
 
 fn main() {

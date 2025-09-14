@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use num_bigint::BigInt;
+
 use crate::interpreter::{
     ast::{ClassTable, Declaration, Expression, Function, Impl, ProgramFile, Trait},
     check_expr::{CheckedExpr, CheckedFunction},
@@ -39,6 +41,7 @@ pub struct LoadedImpl {
     pub class_name: String,
     pub trait_name: Option<(String, String)>,
     pub method_impls: HashMap<String, LoadedFunction>,
+    pub checked_method_impls: HashMap<String, CheckedFunction>,
 }
 
 #[derive(Clone, Debug)]
@@ -81,8 +84,21 @@ pub enum Type {
     GenericClass(String, String),
     Trait(String, String),
     Impl(String, String),
-    Literal(Expression),
+    Literal(Value),
     CheckedLiteral(Box<CheckedExpr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Value {
+    Null,
+    Bool(bool),
+    Int(BigInt),
+    U32(u32),
+    Str(String),
+    Struct(String, String, Vec<Value>),
+    Impl(String, String, Vec<TraitArg>, Box<Value>),
+    List(Vec<Value>),
+    Class(String, String),
 }
 
 impl ArgCell {
@@ -122,12 +138,6 @@ impl ArgCell {
 pub enum ClassCell {
     Name(String),
     Type(Type),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Buildable {
-    Class(String, String),
-    Impl(String, String, Vec<TraitArg>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,7 +198,8 @@ impl Type {
                     _ => panic!("Type is not a generic class: {:?}", t),
                 }
             }
-            Expression::Str(s) => Type::Literal(Expression::Str(s.clone())),
+            Expression::Str(s) => Type::Literal(Value::Str(s.clone())),
+            Expression::Null => Type::Literal(Value::Null),
             _ => panic!("Invalid type expression: {:?}", expr),
         }
     }
@@ -219,13 +230,18 @@ impl LoadedImpl {
             _ => panic!("Invalid impl header: {:?}", impl_def.header),
         };
 
-        let self_type =
+        let class_type =
             program.lookup_class(module_name, &impl_def.header[0].to_name().expect_name());
-        let (class_module, class_name, _) = match &self_type {
+        let self_type = if let Some(impl_name) = &impl_name {
+            Type::Impl(module_name.to_owned(), impl_name.clone())
+        } else {
+            class_type.clone()
+        };
+        let (class_module, class_name, _) = match &class_type {
             Type::Class(m, c, a) if a.is_empty() => (m.clone(), c.clone(), a.clone()),
             _ => panic!(
                 "Impl self type must be a non-generic class: {:?}",
-                self_type
+                class_type
             ),
         };
 
@@ -243,12 +259,17 @@ impl LoadedImpl {
                 class_name,
                 trait_name,
                 method_impls,
+                checked_method_impls: HashMap::new(),
             },
         )
     }
 
     pub fn lookup_method_impl(&self, name: &str) -> Option<&LoadedFunction> {
         self.method_impls.get(name)
+    }
+
+    pub fn lookup_checked_method_impl(&self, name: &str) -> Option<&CheckedFunction> {
+        self.checked_method_impls.get(name)
     }
 }
 
@@ -546,6 +567,7 @@ impl LoadedProgram {
                     body: Expression::Builtin,
                 },
             )]),
+            checked_method_impls: HashMap::new(),
         });
 
         for (module_name, module) in &program.modules {
@@ -613,15 +635,47 @@ impl LoadedProgram {
     }
 
     fn type_check(&mut self) {
-        for ((module_name, func_name), decl) in &self.decls.clone() {
-            if let LoadedDecl::Function(func) = decl {
-                let checked_function = func.check(self, None, module_name);
-                self.decls.insert(
-                    (module_name.clone(), func_name.clone()),
-                    LoadedDecl::CheckedFunction(checked_function),
-                );
+        let mut new_decls = HashMap::new();
+        for ((module_name, decl_name), decl) in &self.decls {
+            match decl {
+                LoadedDecl::CheckedFunction(_) => panic!(),
+                LoadedDecl::Class(_) | LoadedDecl::Trait(_) => {
+                    // Nothing to do for classes or traits
+                    new_decls.insert((module_name.clone(), decl_name.clone()), decl.clone());
+                }
+                LoadedDecl::Impl(impl_decl) => {
+                    let current_type = Type::Impl(module_name.clone(), decl_name.clone());
+                    let mut impl_decl2 = impl_decl.clone();
+                    impl_decl2.type_check(&current_type, self);
+                    new_decls.insert(
+                        (module_name.clone(), decl_name.clone()),
+                        LoadedDecl::Impl(impl_decl2),
+                    );
+                }
+                LoadedDecl::Function(func) => {
+                    let checked_function = func.check(self, None, module_name);
+                    new_decls.insert(
+                        (module_name.clone(), decl_name.clone()),
+                        LoadedDecl::CheckedFunction(checked_function),
+                    );
+                }
             }
         }
+        self.decls = new_decls;
+        self.anon_impls = self
+            .anon_impls
+            .iter()
+            .map(|impl_decl| {
+                let current_type = Type::Class(
+                    impl_decl.class_module.clone(),
+                    impl_decl.class_name.clone(),
+                    vec![],
+                );
+                let mut impl_decl2 = impl_decl.clone();
+                impl_decl2.type_check(&current_type, self);
+                impl_decl2
+            })
+            .collect();
     }
 
     fn check_consistency(&self) {
@@ -685,6 +739,14 @@ impl LoadedProgram {
             .and_then(LoadedDecl::as_opt_function)
     }
 
+    pub fn lookup_checked_fn(&self, module_name: &str, name: &str) -> Option<&CheckedFunction> {
+        let search_key = (module_name.to_owned(), name.to_owned());
+        self.decls.get(&search_key).and_then(|decl| match decl {
+            LoadedDecl::CheckedFunction(f) => Some(f),
+            _ => None,
+        })
+    }
+
     pub fn lookup_type_as_class(&self, typ: &Type) -> &LoadedClass {
         if let Type::Class(module, name, args) = typ
             && args.len() == 0
@@ -692,6 +754,21 @@ impl LoadedProgram {
             self.lookup_class(module, name).expect("Class not found")
         } else {
             panic!("Type is not a non-generic class: {:?}", typ);
+        }
+    }
+
+    pub fn lookup_type_as_impl(&self, typ: &Type) -> Vec<&LoadedImpl> {
+        if let Type::Impl(module, name) = typ {
+            vec![self.lookup_impl(module, name).expect("Impl not found")]
+        } else if let Type::Class(module, name, args) = typ
+            && args.len() == 0
+        {
+            self.anon_impls
+                .iter()
+                .filter(|impl_def| impl_def.class_module == *module && impl_def.class_name == *name)
+                .collect()
+        } else {
+            panic!("Type is not an impl: {:?}", typ);
         }
     }
 
@@ -809,31 +886,51 @@ impl LoadedProgram {
         }
     }
 
-    pub fn to_buildable(&self, current_module: &str, expr: &Expression) -> Buildable {
-        let (head, args) = expr.to_head_and_args();
+    pub fn lookup_checked_anon_impl(
+        &self,
+        source_module: &str,
+        class_module: &str,
+        class_name: &str,
+        method: &str,
+    ) -> (String, String, &CheckedFunction) {
         let mut candidates = vec![];
-        for module in [current_module, "std"] {
-            if self.lookup_class(module, &head).is_some() {
-                candidates.push(Buildable::Class(module.to_owned(), head.clone()));
-            }
-            // if self.lookup_trait(module, &head).is_some() && !args.is_empty() {
-            //     candidates.push(Buildable::Impl(module.to_owned(), head.clone(), args.clone()));
-            // }
-            if self.lookup_impl(module, &head).is_some() {
-                candidates.push(Buildable::Impl(
-                    module.to_owned(),
-                    head.clone(),
-                    args.clone(),
-                ));
+        let superclasses = self.visible_superclasses(Some(source_module), class_module, class_name);
+        for (super_module, super_class) in &superclasses {
+            for impl_def in &self.anon_impls {
+                if impl_def.class_module != *super_module || impl_def.class_name != *super_class {
+                    continue;
+                }
+                if let Some(method_impl) = impl_def.lookup_checked_method_impl(method) {
+                    candidates.push((super_module, super_class, method_impl));
+                }
             }
         }
         match candidates.len() {
-            0 => panic!("No such buildable: ({}|std)::{}", current_module, head),
-            1 => candidates.pop().unwrap(),
+            0 => panic!(
+                "No anon impl for {}::{}::{}",
+                class_module, class_name, method
+            ),
+            1 => (
+                candidates[0].0.clone(),
+                candidates[0].1.clone(),
+                candidates[0].2,
+            ),
             _ => panic!(
-                "Ambiguous buildable: {} (candidates: {:?})",
-                head, candidates
+                "Ambiguous anon impl for {}::{}::{} (candidates: {:?})",
+                class_module, class_name, method, candidates
             ),
         }
+    }
+}
+
+impl LoadedImpl {
+    fn type_check(&mut self, current_type: &Type, program: &LoadedProgram) {
+        let mut checked_method_impls = HashMap::new();
+        for (method_name, method_impl) in &self.method_impls {
+            let checked_function =
+                method_impl.check(&program, Some(current_type.clone()), &self.class_module);
+            checked_method_impls.insert(method_name.clone(), checked_function);
+        }
+        self.checked_method_impls = checked_method_impls;
     }
 }

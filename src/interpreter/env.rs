@@ -1,12 +1,12 @@
 use core::panic;
 use std::{collections::HashMap, mem};
 
-use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::interpreter::{
-    ast::{Expression, ProgramFile, Statement},
-    check::{Buildable, LoadedFunction, LoadedProgram, SyntacticProgram, TraitArg, Type, VarName},
+    ast::ProgramFile,
+    check::{LoadedProgram, SyntacticProgram, Type, Value, VarName},
+    check_expr::{CheckedExpr, CheckedFunction, CheckedStatement},
 };
 
 pub struct Env {
@@ -21,23 +21,14 @@ struct VarValue {
     mutable: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Value {
-    Null,
-    Bool(bool),
-    Int(BigInt),
-    U32(u32),
-    Str(String),
-    Struct(String, String, Vec<Value>),
-    Impl(String, String, Vec<TraitArg>, Box<Value>),
-    List(Vec<Value>),
-    Class(String, String),
-}
-
-impl LoadedFunction {
+impl CheckedFunction {
     fn check_args(&self, args: &[Value], program: &LoadedProgram) {
         if args.len() != self.params.len() {
-            panic!("Argument count mismatch");
+            panic!(
+                "Argument count mismatch: expected {}, got {}",
+                self.params.len(),
+                args.len()
+            );
         }
         for (arg, param) in args.iter().zip(&self.params) {
             if !arg.is_instance(param.get_type(), program) {
@@ -52,14 +43,14 @@ impl LoadedFunction {
 }
 
 impl Env {
-    pub fn new(module_name: &str, program: ProgramFile) -> Self {
+    pub fn new(programs: &[(String, ProgramFile)], main_module: &str) -> Self {
         let program = SyntacticProgram {
-            modules: HashMap::from([(module_name.to_owned(), program)]),
+            modules: programs.iter().cloned().collect(),
         };
         let program = LoadedProgram::new(&program);
         Env {
             program,
-            current_module: module_name.to_owned(),
+            current_module: main_module.to_owned(),
             vars: HashMap::new(),
             stack: Vec::new(),
         }
@@ -67,59 +58,6 @@ impl Env {
 
     fn run_builtin(&self, func: &str, args: &[Value]) -> Option<Value> {
         match func {
-            "==" => {
-                if args.len() != 2 {
-                    panic!("Invalid number of arguments for == operator");
-                }
-                let left = &args[0];
-                let right = &args[1];
-                Some(Value::Bool(left == right))
-            }
-            "!=" => {
-                if args.len() != 2 {
-                    panic!("Invalid number of arguments for != operator");
-                }
-                let left = &args[0];
-                let right = &args[1];
-                Some(Value::Bool(left != right))
-            }
-            "<" => {
-                if args.len() != 2 {
-                    panic!("Invalid number of arguments for < operator");
-                }
-                let left = &args[0];
-                let right = &args[1];
-                match (left, right) {
-                    (Value::Int(l), Value::Int(r)) => Some(Value::Bool(l < r)),
-                    (Value::U32(l), Value::U32(r)) => Some(Value::Bool(l < r)),
-                    _ => panic!("Invalid types for < operator"),
-                }
-            }
-            ">" => {
-                if args.len() != 2 {
-                    panic!("Invalid number of arguments for > operator");
-                }
-                let left = &args[0];
-                let right = &args[1];
-                match (left, right) {
-                    (Value::Int(l), Value::Int(r)) => Some(Value::Bool(l > r)),
-                    (Value::U32(l), Value::U32(r)) => Some(Value::Bool(l > r)),
-                    _ => panic!("Invalid types for > operator"),
-                }
-            }
-            "+" => {
-                if args.len() != 2 {
-                    panic!("Invalid number of arguments for + operator");
-                }
-                let left = &args[0];
-                let right = &args[1];
-                match (left, right) {
-                    (Value::Int(l), Value::Int(r)) => Some(Value::Int(l + r)),
-                    (Value::U32(l), Value::U32(r)) => Some(Value::U32(l + r)),
-                    (Value::Str(l), Value::Str(r)) => Some(Value::Str(l.to_owned() + r)),
-                    _ => panic!("Invalid types for + operator"),
-                }
-            }
             "assert" => {
                 if args.len() != 1 {
                     panic!("Invalid number of arguments for assert function");
@@ -164,6 +102,59 @@ impl Env {
 
     fn run_builtin_method(&self, method: &str, args: &[Value]) -> Value {
         match method {
+            "==" => {
+                if args.len() != 2 {
+                    panic!("Invalid number of arguments for == operator");
+                }
+                let left = &args[0];
+                let right = &args[1];
+                Value::Bool(left == right)
+            }
+            "!=" => {
+                if args.len() != 2 {
+                    panic!("Invalid number of arguments for != operator");
+                }
+                let left = &args[0];
+                let right = &args[1];
+                Value::Bool(left != right)
+            }
+            "<" => {
+                if args.len() != 2 {
+                    panic!("Invalid number of arguments for < operator");
+                }
+                let left = &args[0];
+                let right = &args[1];
+                match (left, right) {
+                    (Value::Int(l), Value::Int(r)) => Value::Bool(l < r),
+                    (Value::U32(l), Value::U32(r)) => Value::Bool(l < r),
+                    _ => panic!("Invalid types for < operator"),
+                }
+            }
+            ">" => {
+                if args.len() != 2 {
+                    panic!("Invalid number of arguments for > operator");
+                }
+                let left = &args[0];
+                let right = &args[1];
+                match (left, right) {
+                    (Value::Int(l), Value::Int(r)) => Value::Bool(l > r),
+                    (Value::U32(l), Value::U32(r)) => Value::Bool(l > r),
+                    _ => panic!("Invalid types for > operator"),
+                }
+            }
+            "+" => {
+                if args.len() != 2 {
+                    panic!("Invalid number of arguments for + operator");
+                }
+                let left = &args[0];
+                let right = &args[1];
+                match (left, right) {
+                    (Value::Int(l), Value::Int(r)) => Value::Int(l + r),
+                    (Value::U32(l), Value::U32(r)) => Value::U32(l + r),
+                    (Value::Str(l), Value::Str(r)) => Value::Str(l.to_owned() + r),
+                    _ => panic!("Invalid types for + operator"),
+                }
+            }
             "field_names" => {
                 if args.len() != 1 {
                     panic!("Invalid number of arguments for field_names method");
@@ -185,14 +176,9 @@ impl Env {
         }
     }
 
-    fn run_method(
-        &mut self,
-        impl_name: Option<(String, String)>,
-        method: &str,
-        args: &[Value],
-    ) -> Value {
+    fn run_method(&mut self, implementing_class: &Type, method: &str, args: &[Value]) -> Value {
         let method_impl = self
-            .lookup_method_impl(impl_name.clone(), args.first(), method)
+            .lookup_checked_method_impl(implementing_class, method)
             .clone();
         method_impl.check_args(args, &self.program);
         for (arg, param) in args.iter().zip(&method_impl.params) {
@@ -200,7 +186,7 @@ impl Env {
             self.create_var(name, arg.clone(), false);
         }
 
-        if method_impl.body == Expression::Builtin {
+        if matches!(method_impl.body, CheckedExpr::Builtin(_)) {
             return self.run_builtin_method(method, args);
         }
 
@@ -222,7 +208,7 @@ impl Env {
 
         let function = self
             .program
-            .lookup_fn(&self.current_module, func)
+            .lookup_checked_fn(&self.current_module, func)
             .unwrap_or_else(|| panic!("Function not found: {}", func))
             .clone();
         function.check_args(args, &self.program);
@@ -264,72 +250,68 @@ impl Env {
         }
     }
 
-    fn lookup_method_impl(
+    fn lookup_checked_method_impl(
         &self,
-        impl_name: Option<(String, String)>,
-        value: Option<&Value>,
+        implementing_class: &Type,
         method: &str,
-    ) -> &LoadedFunction {
-        if let Some((impl_module, impl_name)) = impl_name {
-            let impl_def = self
-                .program
-                .lookup_impl(&impl_module, &impl_name)
-                .unwrap_or_else(|| panic!("Impl not found: {}::{}", impl_module, impl_name));
-            impl_def.lookup_method_impl(method).unwrap_or_else(|| {
-                panic!(
-                    "Method {} not found in impl {}::{}",
-                    method, impl_module, impl_name
-                )
-            })
-        } else if let Some(value) = value {
-            let (class_module_name, class_name) = value.get_class();
-            self.program
-                .lookup_anon_impl(
-                    &self.current_module,
-                    &class_module_name,
-                    &class_name,
-                    method,
-                )
-                .2
-        } else {
-            panic!("Cannot lookup method {} without impl or value", method);
+    ) -> &CheckedFunction {
+        match implementing_class {
+            Type::Impl(_, _) | Type::Class(_, _, _) => {
+                let impl_defs = self.program.lookup_type_as_impl(&implementing_class);
+                let mut candidates = vec![];
+                for impl_def in impl_defs {
+                    if let Some(m) = impl_def.lookup_checked_method_impl(method) {
+                        candidates.push(m);
+                    }
+                }
+                match candidates.len() {
+                    0 => panic!(
+                        "No method {} in implementing class {:?}",
+                        method, implementing_class
+                    ),
+                    1 => candidates[0],
+                    _ => panic!(
+                        "Ambiguous method {} in implementing class {:?}: found {} candidates",
+                        method,
+                        implementing_class,
+                        candidates.len()
+                    ),
+                }
+            }
+            _ => {
+                panic!("Implementing class must be an impl or class type")
+            }
         }
     }
 
-    fn eval_stmt(&mut self, stmt: &Statement) {
+    fn eval_stmt(&mut self, stmt: &CheckedStatement) {
         match stmt {
-            Statement::Expr(expr) => {
+            CheckedStatement::Expr(expr) => {
                 self.eval_expr(expr);
             }
-            Statement::Let(var, expr, mutable) => {
+            CheckedStatement::Let(var, t, expr, mutable) => {
                 let value = self.eval_expr(expr);
-                match var.as_slice() {
-                    &[Expression::Token(ref x)] => {
-                        self.create_var(VarName::Name(x.clone()), value, *mutable);
-                    }
-                    _ => panic!("Unsupported variable in let statement"),
-                }
+                self.create_var(VarName::Name(var.clone()), value, *mutable);
             }
-            Statement::Assign(kind, lhs, rhs) => {
-                let name = lhs.to_name();
+            CheckedStatement::Assign(kind, lhs, rhs) => {
                 let value = self.eval_expr(rhs);
                 match kind as &str {
                     "=" => {
-                        let var = self.vars.get_mut(&name).expect("Variable not found");
+                        let var = self.vars.get_mut(lhs).expect("Variable not found");
                         if !var.mutable {
                             panic!("Cannot assign to immutable variable");
                         }
                         var.value = value;
                     }
                     "+=" => {
-                        let var = self.vars.get_mut(&name).expect("Variable not found");
+                        let var = self.vars.get_mut(lhs).expect("Variable not found");
                         if !var.mutable {
                             panic!("Cannot assign to immutable variable");
                         }
                         let new_value = match (&var.value, &value) {
                             (Value::Int(l), Value::Int(r)) => Value::Int(l + r),
                             (Value::U32(l), Value::U32(r)) => Value::U32(l + r),
-                            (Value::Str(l), Value::Str(r)) => Value::Str(l.to_owned() + r),
+                            (Value::Str(l), Value::Str(r)) => Value::Str(l.to_owned() + &r),
                             _ => panic!("Invalid types for += operator"),
                         };
                         var.value = new_value;
@@ -337,12 +319,12 @@ impl Env {
                     _ => panic!("Unsupported assignment operator"),
                 }
             }
-            Statement::For(header, body) => {
-                assert!(header.len() == 2);
-                let name = header[0].to_name();
-                let iterable = self.eval_expr(&header[1]);
+            CheckedStatement::For(name, t, iterable_expr, body) => {
+                let name = VarName::Name(name.clone());
+                let iterable = self.eval_expr(&iterable_expr);
                 if let Value::List(items) = iterable {
                     for item in items {
+                        assert!(item.is_instance(t, &self.program));
                         self.create_var(name.clone(), item, false);
                         for stmt in body {
                             self.eval_stmt(stmt);
@@ -353,7 +335,7 @@ impl Env {
                     panic!("For loop expects a list");
                 }
             }
-            Statement::Loop(body) => loop {
+            CheckedStatement::Loop(body) => loop {
                 for stmt in body {
                     self.eval_stmt(stmt);
                 }
@@ -361,68 +343,61 @@ impl Env {
         }
     }
 
-    fn eval_expr(&mut self, expr: &Expression) -> Value {
+    fn eval_expr(&mut self, expr: &CheckedExpr) -> Value {
         match expr {
-            Expression::Empty | Expression::Null => Value::Null,
-            Expression::Token(s) => self
+            CheckedExpr::Null => Value::Null,
+            CheckedExpr::Token(s, t) => self
                 .lookup_var_or_global(&VarName::Name(s.clone()))
-                .unwrap_or_else(|| panic!("Variable {} not found", s)),
-            Expression::Bool(b) => Value::Bool(*b),
-            Expression::Integer(n) => Value::Int(n.clone()),
-            Expression::U32(n) => Value::U32(*n),
-            Expression::Str(s) => Value::Str(s.clone()),
-            Expression::List(elements) => {
+                .unwrap_or_else(|| panic!("Variable {} not found", s))
+                .should_be_type(t, &self.program),
+            CheckedExpr::Bool(b) => Value::Bool(*b),
+            CheckedExpr::Integer(n) => Value::Int(n.clone()),
+            CheckedExpr::U32(n) => Value::U32(*n),
+            CheckedExpr::Str(s) => Value::Str(s.clone()),
+            CheckedExpr::List(elements, t) => {
                 let values = elements.iter().map(|e| self.eval_expr(e)).collect();
-                Value::List(values)
+                Value::List(values).should_be_type(t, &self.program)
             }
-            Expression::SelfKeyword => self
+            CheckedExpr::SelfKeyword(t) => self
                 .lookup_var_or_global(&VarName::SelfKeyword)
-                .expect("'self' used outside of method"),
-            Expression::FieldAccess(base, field) => {
+                .expect("'self' used outside of method")
+                .should_be_type(t, &self.program),
+            CheckedExpr::FieldAccess(base, field, t) => {
                 let base_val = self.eval_expr(base);
                 self.get_struct_member(base_val, field)
+                    .should_be_type(t, &self.program)
             }
-            Expression::Build(cl, fields) => {
-                let buildable = self.program.to_buildable(&self.current_module, cl);
-                match buildable {
-                    Buildable::Class(class_module, class_name) => {
-                        let mut field_values =
-                            vec![
-                                Value::Null;
-                                self.get_class_field_count(&class_module, &class_name)
-                            ];
-                        for field in fields {
-                            match field.as_slice() {
-                                &[Expression::Token(ref name), ref expr] => {
-                                    let value = self.eval_expr(expr);
-                                    field_values[self.get_class_field_index(
-                                        &class_module,
-                                        &class_name,
-                                        name,
-                                    )] = value;
-                                    // TODO: check it's the correct type
-                                }
-                                _ => panic!("Invalid field assignment in constructor"),
-                            }
-                        }
-                        Value::Struct(class_module, class_name, field_values)
+            CheckedExpr::BuildClass(buildable, fields) => {
+                if let Type::Class(class_module, class_name, args) = buildable
+                    && args.len() == 0
+                {
+                    let mut field_values =
+                        vec![Value::Null; self.get_class_field_count(&class_module, &class_name)];
+                    for (name, expr) in fields {
+                        let value = self.eval_expr(expr);
+                        field_values
+                            [self.get_class_field_index(&class_module, &class_name, name)] = value;
                     }
-                    Buildable::Impl(module, head, args) => {
-                        assert!(fields.len() == 1);
-                        assert!(fields[0].len() == 1);
-                        // TODO: check the thing actually supports this impl
-                        let value = self.eval_expr(&fields[0][0]);
-                        Value::Impl(module, head, args, Box::new(value))
-                    }
+                    Value::Struct(class_module.clone(), class_name.clone(), field_values)
+                } else {
+                    panic!("Can only build non-generic classes this way");
                 }
             }
-            Expression::Block(stmts, expr) => {
+            CheckedExpr::BuildImpl(buildable, value) => {
+                if let Type::Impl(module, head) = buildable {
+                    let value = self.eval_expr(value);
+                    Value::Impl(module.clone(), head.clone(), vec![], Box::new(value))
+                } else {
+                    panic!("Can only build impls this way");
+                }
+            }
+            CheckedExpr::Block(stmts, expr) => {
                 for stmt in stmts {
                     self.eval_stmt(stmt);
                 }
                 self.eval_expr(expr)
             }
-            Expression::And(left, right) => {
+            CheckedExpr::And(left, right) => {
                 let left_val = self.eval_expr(left);
                 match left_val {
                     Value::Bool(true) => self.eval_expr(right),
@@ -430,7 +405,7 @@ impl Env {
                     _ => panic!("Invalid type for && operator"),
                 }
             }
-            Expression::Or(left, right) => {
+            CheckedExpr::Or(left, right) => {
                 let left_val = self.eval_expr(left);
                 match left_val {
                     Value::Bool(true) => Value::Bool(true),
@@ -438,8 +413,7 @@ impl Env {
                     _ => panic!("Invalid type for || operator"),
                 }
             }
-            Expression::Call(f, args) => {
-                let func = f.to_name().expect_name();
+            CheckedExpr::Call(f_module, f_name, args, t) => {
                 let arg_values = args
                     .iter()
                     .map(|arg| self.eval_expr(arg))
@@ -447,32 +421,37 @@ impl Env {
                 let mut vars = HashMap::new();
                 mem::swap(&mut self.vars, &mut vars);
                 self.stack.push(vars);
-                let result = self.run(&func, &arg_values);
+                let old_module = self.current_module.clone();
+                self.current_module = f_module.clone();
+                let result = self.run(&f_name, &arg_values);
                 self.vars = self.stack.pop().expect("Stack underflow");
-                result
+                self.current_module = old_module;
+                result.should_be_type(t, &self.program)
             }
-            Expression::MethodCall(base, method, args) => {
+            CheckedExpr::MethodCall(base, implementing_class, method, args, t) => {
                 let base_impl = self.eval_expr(base);
-                let (impl_name, _impl_args, base_val) =
-                    if let Value::Impl(impl_module, impl_name, impl_args, base_val) = base_impl {
-                        (Some((impl_module, impl_name)), impl_args, *base_val)
-                    } else {
-                        (None, Vec::new(), base_impl)
-                    };
-                let mut arg_values = vec![base_val];
+                // let (impl_name, _impl_args, base_val) =
+                //     if let Value::Impl(impl_module, impl_name, impl_args, base_val) = base_impl {
+                //         (Some((impl_module, impl_name)), impl_args, *base_val)
+                //     } else {
+                //         (None, Vec::new(), base_impl)
+                //     };
+                let mut arg_values = vec![base_impl];
                 arg_values.extend(args.iter().map(|arg| self.eval_expr(arg)));
                 let mut vars = HashMap::new();
                 mem::swap(&mut self.vars, &mut vars);
                 self.stack.push(vars);
-                let result = self.run_method(impl_name, method, &arg_values);
+                let result = self.run_method(implementing_class, method, &arg_values);
                 self.vars = self.stack.pop().expect("Stack underflow");
-                result
+                result.should_be_type(t, &self.program)
             }
-            Expression::If(cond, then_body, else_body) => {
+            CheckedExpr::If(cond, then_body, else_body, t) => {
                 let condition = self.eval_expr(cond);
                 match condition {
-                    Value::Bool(true) => self.eval_expr(then_body),
-                    Value::Bool(false) => self.eval_expr(else_body),
+                    Value::Bool(true) => self.eval_expr(then_body).should_be_type(t, &self.program),
+                    Value::Bool(false) => {
+                        self.eval_expr(else_body).should_be_type(t, &self.program)
+                    }
                     _ => {
                         unimplemented!("If condition not true or false: {:?}", condition)
                     }
@@ -554,6 +533,14 @@ impl Value {
         }
     }
 
+    fn should_be_type(self, typ: &Type, program: &LoadedProgram) -> Self {
+        if self.is_instance(typ, program) {
+            self
+        } else {
+            panic!("Type mismatch: expected {:?}, got {:?}", typ, self);
+        }
+    }
+
     fn is_instance(&self, typ: &Type, program: &LoadedProgram) -> bool {
         match typ {
             Type::Class(class_module, class_name, args) => {
@@ -571,7 +558,15 @@ impl Value {
                 let (my_module, my_class) = self.get_class();
                 program.is_subclass(&my_module, &my_class, class_module, class_name)
             }
-            _ => unimplemented!("Unimplemented type check for {:?}", typ),
+            Type::Impl(module, head) => {
+                if let Value::Impl(impl_module, impl_head, _, _) = self {
+                    module == impl_module && head == impl_head
+                } else {
+                    false
+                }
+            }
+            Type::Literal(lit) => self == lit,
+            _ => unimplemented!("Type checking not implemented for type {:?}", typ),
         }
     }
 }

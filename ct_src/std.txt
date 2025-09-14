@@ -1,0 +1,11 @@
+impl str:: {
+    fn '+'(self, other: str) -> str { builtin }
+    fn '=='(self, other: str) -> bool { builtin }
+}
+
+impl u32:: {
+    fn '+'(self, other: u32) -> u32 { builtin }
+    fn '=='(self, other: u32) -> bool { builtin }
+}
+
+fn assert(condition: bool) -> null { builtin }
